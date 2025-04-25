@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/benkoben/unsubtle-core/internal/database"
+	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 )
 
@@ -32,6 +33,7 @@ func run(ctx context.Context, w io.Writer, getenv func(string) string) error {
 	defer cancel()
 
 	// Handle environment variables
+	godotenv.Load()
 	dbConnString := getenv("DB_CONNECTION_STRING")
 	host := getenv("SVC_HOST")
 	port := getenv("SVC_PORT")

@@ -12,5 +12,9 @@ func addRoutes(
 	dbStore *database.Queries,
 	// --- More different stores can be added below if necessary
 ) {
+	// frontend requests
 	mux.Handle("GET /", handleHelloWorld(config))
+
+	// api requests
+	mux.Handle("POST /", handleCreateUser(dbStore))
 }
