@@ -7,6 +7,7 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"time"
 
 	"github.com/google/uuid"
@@ -25,7 +26,7 @@ RETURNING id, created_at, updated_at, email
 
 type CreateUserParams struct {
 	Email          string `json:"email"`
-	HashedPassword string `json:"hashed_password"`
+	HashedPassword string `json:"hashed_password,omitempty"`
 }
 
 type CreateUserRow struct {
@@ -45,6 +46,15 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (CreateU
 		&i.Email,
 	)
 	return i, err
+}
+
+const deleteUser = `-- name: DeleteUser :execresult
+DELETE FROM users
+WHERE id = $1
+`
+
+func (q *Queries) DeleteUser(ctx context.Context, id uuid.UUID) (sql.Result, error) {
+	return q.db.ExecContext(ctx, deleteUser, id)
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
@@ -159,7 +169,7 @@ func (q *Queries) ResetUsers(ctx context.Context) ([]User, error) {
 
 const updateUser = `-- name: UpdateUser :one
 UPDATE users
-SET email = $2, hashed_password = $3
+SET email = $2, hashed_password = $3, updated_at = $4
 WHERE id = $1
 RETURNING id, email, hashed_password, created_at, updated_at
 `
@@ -167,11 +177,17 @@ RETURNING id, email, hashed_password, created_at, updated_at
 type UpdateUserParams struct {
 	ID             uuid.UUID `json:"id"`
 	Email          string    `json:"email"`
-	HashedPassword string    `json:"hashed_password"`
+	HashedPassword string    `json:"hashed_password,omitempty"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 func (q *Queries) UpdateUser(ctx context.Context, arg UpdateUserParams) (User, error) {
-	row := q.db.QueryRowContext(ctx, updateUser, arg.ID, arg.Email, arg.HashedPassword)
+	row := q.db.QueryRowContext(ctx, updateUser,
+		arg.ID,
+		arg.Email,
+		arg.HashedPassword,
+		arg.UpdatedAt,
+	)
 	var i User
 	err := row.Scan(
 		&i.ID,

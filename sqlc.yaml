@@ -8,5 +8,5 @@ sql:
         emit_json_tags: true
         out: "internal/database"
         overrides:
-          - go_struct_tag: `json:"hashed_password,omitempty"`
-            column: users.hashed_password
+          - column: users.hashed_password
+            go_struct_tag: json:"hashed_password,omitempty"
