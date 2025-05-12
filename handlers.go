@@ -1,8 +1,8 @@
 package main
 
 import (
+	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"log"
 	"math"
@@ -12,7 +12,6 @@ import (
 	"github.com/benkoben/unsubtle-core/internal/auth"
 	"github.com/benkoben/unsubtle-core/internal/database"
 	"github.com/google/uuid"
-	"github.com/lib/pq"
 	_ "github.com/lib/pq"
 	"github.com/wagslane/go-password-validator"
 )
@@ -32,15 +31,36 @@ var (
 	minEntropy            = math.Log2(passwordBase)
 )
 
+// dbQuerier is an interface that allows us to use dependency injection on handlers.
+// It's purpose is to enable self-contained unit testing. While this wont allow us to test queries, it does allow us to test the logic defined within a handler.
+type dbQuerier interface {
+	// User interactions
+	GetUserById(context.Context, uuid.UUID) (database.User, error)
+	CreateUser(context.Context, database.CreateUserParams) (database.CreateUserRow, error)
+	GetUserByEmail(ctx context.Context, email string) (database.User, error)
+    DeleteUser(ctx context.Context, id uuid.UUID) (sql.Result, error)
+
+	// Subscription interactions
+
+	// Category interactions
+
+	// Card interactions
+
+	// ActiveTrails interactions
+
+	// ActiveSubscriptions interactions
+}
+
+// -- Data that is expected by various requests
 type userRequestData struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
 }
 
-func handleHelloWorld(config *Config) http.Handler {
+func handleHelloWorld(_ *Config) http.Handler {
 	// This pattern gives each handler its own closure environment. You can do initialization work in this space, and the data will be available to the handlers when they are called.
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n, err := w.Write([]byte(fmt.Sprintf("Hello World, I want to connect to database %s", config.Database.ConnectionString)))
+		n, err := w.Write([]byte("Hello world"))
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
@@ -51,12 +71,14 @@ func handleHelloWorld(config *Config) http.Handler {
 }
 
 // --- User handlers
-func handleCreateUser(query *database.Queries) http.Handler {
+func handleCreateUser(query dbQuerier) http.Handler {
+	var res response
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Parse the email and password from the request body
 		defer r.Body.Close()
 
-		newUserData, err := decode[userRequestData](w, r)
+		newUserData, err := decode[userRequestData](r.Body)
 		if err != nil {
 			log.Printf("error decoding json: %v", err)
 			w.WriteHeader(http.StatusBadRequest)
@@ -65,18 +87,44 @@ func handleCreateUser(query *database.Queries) http.Handler {
 
 		// Validate the email
 		if ok := validEmail(newUserData.Email); !ok {
-			w.WriteHeader(http.StatusBadRequest)
-			_, err := w.Write([]byte("invalid email"))
-			if err != nil {
-				log.Printf("error writing response: %v", err)
+			res.Status = http.StatusBadRequest
+			res.Error = "invalid email"
+			if err := encode(w, r, res.Status, res); err != nil {
+				log.Printf("could not encode response: %v", err)
 			}
+			return
+		}
+
+		// Check if the email is already registered
+		existingUser, err := query.GetUserByEmail(r.Context(), newUserData.Email)
+		if err != nil && err != sql.ErrNoRows {
+			// If any error other than ErrNoRows is returned this means something unexpected happened.
+			res.Status = http.StatusInternalServerError
+			res.Error = http.StatusText(http.StatusInternalServerError)
+
+			if err := encode(w, r, res.Status, res); err != nil {
+				log.Printf("could not encode response: %v", err)
+			}
+
+			return
+		}
+
+		// If existingUser contains data, this means there already exists a database entry for the requested email
+		if existingUser.Email != "" {
+			res.Status = http.StatusConflict
+			res.Error = "email is already registered"
+
+			if err := encode(w, r, res.Status, res); err != nil {
+				log.Printf("could not encode response: %v", err)
+			}
+
 			return
 		}
 
 		// Validate the password criteria
 		if err := passwordvalidator.Validate(newUserData.Password, minEntropy); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
-			_, err := w.Write([]byte(fmt.Sprintf("invalid password: %v", err)))
+			_, err := w.Write(fmt.Appendf([]byte{}, "invalid password: %v", err))
 			if err != nil {
 				log.Printf("error writing response: %v", err)
 			}
@@ -99,17 +147,9 @@ func handleCreateUser(query *database.Queries) http.Handler {
 		dbResponse, err := query.CreateUser(r.Context(), createUserParams)
 		statusCode := http.StatusCreated
 		if err != nil {
-			pgErr, ok := err.(*pq.Error)
-			if ok {
-				if pgErr.Code == "23505" {
-					// Row already exists. Return a StatusOK back to the client instead of StatusCreated
-					statusCode = http.StatusOK
-				}
-			} else {
-				log.Printf("error creating user: %v", err)
-				w.WriteHeader(http.StatusInternalServerError)
-				return
-			}
+			log.Printf("error creating user: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
 		}
 
 		if err := encode(w, r, statusCode, dbResponse); err != nil {
@@ -137,16 +177,20 @@ func handleListUsers(query *database.Queries) http.Handler {
 	})
 }
 
-func handleGetUser(query *database.Queries) http.Handler {
+func handleGetUser(query dbQuerier) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Parse id from URL path
+		log.Println(r.PathValue("id"))
+		log.Println(r.URL.String())
 		id, err := uuid.Parse(r.PathValue("id"))
 		if err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			w.Write([]byte("invalid id"))
+			return
 		}
 
 		user, err := query.GetUserById(r.Context(), id)
+
 		if err != nil {
 			if err == sql.ErrNoRows {
 				w.WriteHeader(http.StatusNotFound)
@@ -155,6 +199,9 @@ func handleGetUser(query *database.Queries) http.Handler {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
+
+		// Sanitize output
+		user.HashedPassword = ""
 
 		if err := encode(w, r, http.StatusOK, user); err != nil {
 			log.Printf("error encoding response: %v", err)
@@ -172,11 +219,15 @@ func handleUpdateUser(query *database.Queries) http.Handler {
 			w.Write([]byte("invalid id"))
 		}
 
-		newUserData, err := decode[userRequestData](w, r)
+		log.Printf("user id %s update", id.String())
+
+		newUserData, err := decode[userRequestData](r.Body)
 		if err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
+
+		log.Println(newUserData)
 
 		if _, err := query.GetUserById(r.Context(), id); err != nil {
 			if err == sql.ErrNoRows {
@@ -195,6 +246,7 @@ func handleUpdateUser(query *database.Queries) http.Handler {
 			if err != nil {
 				log.Printf("error writing response: %v", err)
 			}
+			return
 		}
 
 		// Hash password
@@ -204,6 +256,8 @@ func handleUpdateUser(query *database.Queries) http.Handler {
 			return
 		}
 
+		log.Printf("new hash calculated %s", hashedPw)
+
 		params := database.UpdateUserParams{
 			ID:             id,
 			Email:          newUserData.Email,
@@ -212,38 +266,43 @@ func handleUpdateUser(query *database.Queries) http.Handler {
 		}
 
 		updatedUser, err := query.UpdateUser(r.Context(), params)
-        if err != nil {
+		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 
-        if err := encode(w, r, http.StatusOK, updatedUser); err != nil {
+		if err := encode(w, r, http.StatusOK, updatedUser); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
-        }
+		}
 	})
 }
 
-func handleDeleteUser(query *database.Queries) http.Handler {
-    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func handleDeleteUser(query dbQuerier) http.Handler {
+	var res response
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Parse id from URL query
 		id, err := uuid.Parse(r.PathValue("id"))
 		if err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			w.Write([]byte("invalid id"))
 		}
-        
-        if _, err := query.DeleteUser(r.Context(), id); err != nil {
-            if err == sql.ErrNoRows {
-                w.WriteHeader(http.StatusNotFound)
-                return
-            }
-            w.WriteHeader(http.StatusInternalServerError)
-            return
-        }
-        
-        w.WriteHeader(http.StatusNoContent)
-    })
+
+		if _, err := query.DeleteUser(r.Context(), id); err != nil {
+			if err == sql.ErrNoRows {
+				res.Error = "id not found"
+				res.Status = http.StatusNotFound
+			} else {
+				res.Error = http.StatusText(http.StatusInternalServerError)
+				res.Status = http.StatusInternalServerError
+			}
+			encode(w, r, res.Status, res)
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
+	})
 }
 
 // --- Card handlers

@@ -1,0 +1,13 @@
+- Bad request when decode fails
+- Bad request when invalid email is used
+- Conflict when email is already registered
+- Internal server error if GetUserEmail returns anything else than ErrNoRows
+- BadRequest when a weak password is used
+- Internal server error when CreateHash fails (Perhaps skip this??)
+- InternalServer error if dbQuerier.CreateUser returns something else than pgErr.Code == "23505"
+
+
+- StatusNotFound when there is no such user
+- StatusInternalServerError when something else happened
+- StatusNoContent when success
+

@@ -46,6 +46,7 @@ func run(ctx context.Context, w io.Writer, getenv func(string) string) error {
 	if host == "" {
 		host = defaultHost
 	}
+
 	if port == "" {
 		port = defaultPort
 	}
