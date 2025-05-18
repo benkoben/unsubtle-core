@@ -16,19 +16,24 @@ func addRoutes(
 	mux.Handle("GET /", handleHelloWorld(config))
 
 	// API requests are defined below
-    //
-    // -- Users
+	//
+	// -- Authentication handlers
+	mux.Handle("POST /api/login", handleLogin(dbStore, config))
+	mux.Handle("POST /api/refresh", handleRefresh(dbStore, config))
+	mux.Handle("POST /api/revoke", handleRevoke(dbStore, config))
+
+	// -- Users
 	mux.Handle("POST /api/users", handleCreateUser(dbStore))
 	mux.Handle("GET /api/users", handleListUsers(dbStore))
 	mux.Handle("GET /api/users/{id}", handleGetUser(dbStore))
 	mux.Handle("PUT /api/users/{id}", handleUpdateUser(dbStore))
 	mux.Handle("DELETE /api/users/{id}", handleDeleteUser(dbStore))
 
-    // -- Categories
+	// -- Categories
 
-    // -- Subscriptions
+	// -- Subscriptions
 
-    // -- ActiveSubscriptions
+	// -- ActiveSubscriptions
 
-    // -- ActiveTrails
+	// -- ActiveTrails
 }

@@ -12,8 +12,9 @@ import (
 	"github.com/benkoben/unsubtle-core/internal/auth"
 	"github.com/benkoben/unsubtle-core/internal/database"
 	"github.com/google/uuid"
-	_ "github.com/lib/pq"
 	"github.com/wagslane/go-password-validator"
+
+	_ "github.com/lib/pq"
 )
 
 const ()
@@ -38,7 +39,13 @@ type dbQuerier interface {
 	GetUserById(context.Context, uuid.UUID) (database.User, error)
 	CreateUser(context.Context, database.CreateUserParams) (database.CreateUserRow, error)
 	GetUserByEmail(ctx context.Context, email string) (database.User, error)
-    DeleteUser(ctx context.Context, id uuid.UUID) (sql.Result, error)
+	DeleteUser(ctx context.Context, id uuid.UUID) (sql.Result, error)
+
+	// RefreshToken interactions
+	CreateRefreshToken(ctx context.Context, arg database.CreateRefreshTokenParams) (database.RefreshToken, error)
+	UpdateRefreshToken(ctx context.Context, arg database.UpdateRefreshTokenParams) (database.RefreshToken, error)
+	RevokeRefreshToken(ctx context.Context, userID uuid.UUID) (database.RefreshToken, error)
+	GetRefreshToken(ctx context.Context, userId uuid.UUID) (database.RefreshToken, error)
 
 	// Subscription interactions
 
@@ -57,6 +64,15 @@ type userRequestData struct {
 	Password string `json:"password"`
 }
 
+type loginResponseData struct {
+	Id           uuid.UUID `json:"id"`
+	Email        string    `json:"email,omitempty"`
+	CreatedAt    time.Time `json:"created_at,omitempty"`
+	UpdatedAt    time.Time `json:"updated_at,omitempty"`
+	Token        string    `json:"token"`
+	RefreshToken string    `json:"refresh_token"`
+}
+
 func handleHelloWorld(_ *Config) http.Handler {
 	// This pattern gives each handler its own closure environment. You can do initialization work in this space, and the data will be available to the handlers when they are called.
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -68,6 +84,215 @@ func handleHelloWorld(_ *Config) http.Handler {
 		fmt.Printf("%d bytes written\n", n)
 		w.WriteHeader(http.StatusOK)
 	})
+}
+
+// --- Authentication handlers
+func handleRevoke(db dbQuerier, cfg *Config) http.Handler {
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		bearer, err := auth.GetBearerToken(r.Header)
+		if err != nil {
+			// No bearer token found in headers
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(http.StatusText(http.StatusForbidden)))
+			return
+		}
+
+		userId, err := auth.ValidateJWT(bearer, cfg.JWTSecret)
+		if err != nil {
+			// Bearer token was found but is not valid
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(http.StatusText(http.StatusForbidden)))
+			return
+		}
+
+		refreshToken, err := db.RevokeRefreshToken(r.Context(), userId)
+		if err != nil {
+			log.Printf("revoke refresh token: %w", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(http.StatusText(http.StatusInternalServerError)))
+			return
+		}
+
+		if err := encode(w, r, http.StatusOK, refreshToken); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(http.StatusText(http.StatusInternalServerError)))
+			return
+		}
+	})
+}
+
+func handleRefresh(db dbQuerier, cfg *Config) http.Handler {
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		bearer, err := auth.GetBearerToken(r.Header)
+		if err != nil {
+			// No bearer token found in headers
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(http.StatusText(http.StatusForbidden)))
+			return
+		}
+
+		userId, err := auth.ValidateJWT(bearer, cfg.JWTSecret)
+		if err != nil {
+			// Bearer token was found but is not valid
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(http.StatusText(http.StatusForbidden)))
+			return
+		}
+
+		// Check if there exists a refresh token
+		refreshToken, err := db.GetRefreshToken(r.Context(), userId)
+		if err != nil {
+			// Normally this is not possible but in rare cases where
+			// an valid JWT is used but no refreshToken exists we need to handle this.
+			if err == sql.ErrNoRows {
+				// Bearer token was found but is not valid
+				w.WriteHeader(http.StatusForbidden)
+				w.Write([]byte(http.StatusText(http.StatusForbidden)))
+				return
+			} else {
+				// Should not happend under normal circumstances
+				log.Printf("retrieve refresh token: %w", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				w.Write([]byte(http.StatusText(http.StatusInternalServerError)))
+				return
+			}
+		}
+
+		// validate if the existing refresh token is not revoked
+		// if the token is revoked or expired
+		if refreshToken.RevokedAt.Valid || refreshToken.ExpiresAt.Unix() < time.Now().Unix() {
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(http.StatusText(http.StatusForbidden)))
+			return
+		}
+
+		// Make JWT token, a token lives for 60 minutes.
+		jwt, err := auth.MakeJWT(userId, cfg.JWTSecret, time.Minute*60)
+		if err != nil {
+			log.Printf("could not create jwt token: %w", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(http.StatusText(http.StatusInternalServerError)))
+			return
+		}
+
+		if err := encode(w, r, http.StatusOK, map[string]string{"token": jwt}); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(http.StatusText(http.StatusInternalServerError)))
+			return
+		}
+	})
+}
+
+func handleLogin(db dbQuerier, cfg *Config) http.Handler {
+	res := response{}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+		// Retrieve credentials from body
+		defer r.Body.Close()
+
+		// Lookup user in database
+		loginCredentials, err := decode[userRequestData](r.Body)
+		if err != nil {
+			log.Printf("invalid json: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		registeredUser, err := db.GetUserByEmail(r.Context(), loginCredentials.Email)
+		if err != nil {
+			// TODO: This if error is ErrNoRows else internal error pattern is reused in quite a lot of different places
+			if err == sql.ErrNoRows {
+				// User does not exist in database
+				res.Status = http.StatusForbidden
+				res.Error = http.StatusText(http.StatusForbidden)
+				if err := encode(w, r, res.Status, res); err != nil {
+					log.Printf("could not encode response: %v", err)
+				}
+				return
+			} else {
+				// Unexpected error
+				log.Printf("retrieving user by email: %w", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				w.Write([]byte(http.StatusText(http.StatusInternalServerError)))
+				return
+			}
+		}
+
+		// Validate password
+		if ok := auth.IsValid(loginCredentials.Password, registeredUser.HashedPassword); !ok {
+			res.Status = http.StatusForbidden
+			res.Error = "invalid password"
+			if err := encode(w, r, res.Status, res); err != nil {
+				log.Printf("could not encode response: %v", err)
+			}
+			return
+		}
+
+		// Make JWT token, a token lives for 60 minutes.
+		jwt, err := auth.MakeJWT(registeredUser.ID, cfg.JWTSecret, time.Minute*60)
+		if err != nil {
+			log.Printf("could not create jwt token: %w", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(http.StatusText(http.StatusInternalServerError)))
+			return
+		}
+
+		// Check if we need to create a refresh token or not
+		refreshToken, err := db.GetRefreshToken(r.Context(), registeredUser.ID)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				newTokenString, err := auth.MakeRefreshToken()
+				if err != nil {
+					log.Printf("could not create refresh token: %w", err)
+					w.WriteHeader(http.StatusInternalServerError)
+					w.Write([]byte(http.StatusText(http.StatusInternalServerError)))
+					return
+				}
+				refreshTokenOpts := database.CreateRefreshTokenParams{
+					UserID:    registeredUser.ID,
+					ExpiresAt: time.Now().Add(time.Hour * 1440), // 60 days
+					Token:     newTokenString,
+				}
+
+				newToken, err := db.CreateRefreshToken(r.Context(), refreshTokenOpts)
+				if err != nil {
+					log.Printf("could not save refresh token to database: %w", err)
+					w.WriteHeader(http.StatusInternalServerError)
+					w.Write([]byte(http.StatusText(http.StatusInternalServerError)))
+					return
+				}
+				refreshToken = newToken
+			} else {
+				// Unexpected error
+				log.Printf("retrieving refresh token: %w", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				w.Write([]byte(http.StatusText(http.StatusInternalServerError)))
+				return
+			}
+		}
+
+		// TODO: What if we login a user that has a revoked refreshToken? I believe that the current implementation allows successful logins 
+		// while keeping revoked refresh tokens. Making it impossible for a user to refresh their bearer token.
+
+		// Create response body
+		responseBody := loginResponseData{
+			Id:           registeredUser.ID,
+			Email:        registeredUser.Email,
+			CreatedAt:    registeredUser.CreatedAt,
+			UpdatedAt:    registeredUser.UpdatedAt,
+			Token:        jwt,
+			RefreshToken: refreshToken.Token,
+		}
+
+		if err := encode(w, r, http.StatusOK, responseBody); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(http.StatusText(http.StatusInternalServerError)))
+			return
+		}
+	})
+
 }
 
 // --- User handlers
@@ -128,6 +353,7 @@ func handleCreateUser(query dbQuerier) http.Handler {
 			if err != nil {
 				log.Printf("error writing response: %v", err)
 			}
+			return
 		}
 
 		// Hash the password

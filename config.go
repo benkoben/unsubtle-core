@@ -17,6 +17,7 @@ type Config struct {
 	Database    *DatabaseConfig
 	Service     *ServiceConfig
 	Environment string
+    JWTSecret   string
 }
 
 func (sc ServiceConfig) Address() string {

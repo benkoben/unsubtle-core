@@ -48,6 +48,15 @@ type Category struct {
 	CreatedBy   uuid.UUID `json:"created_by"`
 }
 
+type RefreshToken struct {
+	UserID    uuid.UUID    `json:"user_id"`
+	CreatedAt time.Time    `json:"created_at"`
+	UpdatedAt time.Time    `json:"updated_at"`
+	Token     string       `json:"token"`
+	ExpiresAt time.Time    `json:"expires_at"`
+	RevokedAt sql.NullTime `json:"revoked_at"`
+}
+
 type Subscription struct {
 	ID             uuid.UUID      `json:"id"`
 	Name           string         `json:"name"`

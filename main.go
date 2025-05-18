@@ -37,11 +37,16 @@ func run(ctx context.Context, w io.Writer, getenv func(string) string) error {
 	dbConnString := getenv("DB_CONNECTION_STRING")
 	host := getenv("SVC_HOST")
 	port := getenv("SVC_PORT")
+	jwtSecret := getenv("JWT_SECRET")
 
 	// Validate inputs
 	if dbConnString == "" {
 		return fmt.Errorf("DB_CONNECTION_STRING not set")
 	}
+
+    if jwtSecret == "" {
+        return fmt.Errorf("JWT_SECRET not set")
+    }
 
 	if host == "" {
 		host = defaultHost
@@ -55,6 +60,7 @@ func run(ctx context.Context, w io.Writer, getenv func(string) string) error {
 	config := Config{
 		Database: &DatabaseConfig{dbConnString},
 		Service:  &ServiceConfig{host, port},
+        JWTSecret: jwtSecret,
 	}
 
 	// Initialize database
