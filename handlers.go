@@ -38,18 +38,23 @@ type dbQuerier interface {
 	// User interactions
 	GetUserById(context.Context, uuid.UUID) (database.User, error)
 	CreateUser(context.Context, database.CreateUserParams) (database.CreateUserRow, error)
-	GetUserByEmail(ctx context.Context, email string) (database.User, error)
-	DeleteUser(ctx context.Context, id uuid.UUID) (sql.Result, error)
+	GetUserByEmail(context.Context, string) (database.User, error)
+	DeleteUser(context.Context, uuid.UUID) (sql.Result, error)
 
 	// RefreshToken interactions
-	CreateRefreshToken(ctx context.Context, arg database.CreateRefreshTokenParams) (database.RefreshToken, error)
-	UpdateRefreshToken(ctx context.Context, arg database.UpdateRefreshTokenParams) (database.RefreshToken, error)
-	RevokeRefreshToken(ctx context.Context, userID uuid.UUID) (database.RefreshToken, error)
-	GetRefreshToken(ctx context.Context, userId uuid.UUID) (database.RefreshToken, error)
+	CreateRefreshToken(context.Context, database.CreateRefreshTokenParams) (database.RefreshToken, error)
+	UpdateRefreshToken(context.Context, database.UpdateRefreshTokenParams) (database.RefreshToken, error)
+	RevokeRefreshToken(context.Context, uuid.UUID) (database.RefreshToken, error)
+	GetRefreshToken(context.Context, uuid.UUID) (database.RefreshToken, error)
 
 	// Subscription interactions
 
 	// Category interactions
+	UpdateCategory(context.Context, database.UpdateCategoryParams) (database.Category, error)
+	ResetCategories(context.Context) ([]database.Category, error)
+	ListCategories(context.Context) ([]database.Category, error)
+	GetCategory(context.Context, uuid.UUID) (database.Category, error)
+	CreateCategory(context.Context, database.CreateCategoryParams) (database.Category, error)
 
 	// Card interactions
 
@@ -71,19 +76,6 @@ type loginResponseData struct {
 	UpdatedAt    time.Time `json:"updated_at,omitempty"`
 	Token        string    `json:"token"`
 	RefreshToken string    `json:"refresh_token"`
-}
-
-func handleHelloWorld(_ *Config) http.Handler {
-	// This pattern gives each handler its own closure environment. You can do initialization work in this space, and the data will be available to the handlers when they are called.
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n, err := w.Write([]byte("Hello world"))
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-		fmt.Printf("%d bytes written\n", n)
-		w.WriteHeader(http.StatusOK)
-	})
 }
 
 // --- Authentication handlers
@@ -114,7 +106,7 @@ func handleRevoke(db dbQuerier, cfg *Config) http.Handler {
 			return
 		}
 
-		if err := encode(w, r, http.StatusOK, refreshToken); err != nil {
+		if err := encode(w, http.StatusOK, refreshToken); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(http.StatusText(http.StatusInternalServerError)))
 			return
@@ -177,7 +169,7 @@ func handleRefresh(db dbQuerier, cfg *Config) http.Handler {
 			return
 		}
 
-		if err := encode(w, r, http.StatusOK, map[string]string{"token": jwt}); err != nil {
+		if err := encode(w, http.StatusOK, map[string]string{"token": jwt}); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(http.StatusText(http.StatusInternalServerError)))
 			return
@@ -207,7 +199,7 @@ func handleLogin(db dbQuerier, cfg *Config) http.Handler {
 				// User does not exist in database
 				res.Status = http.StatusForbidden
 				res.Error = http.StatusText(http.StatusForbidden)
-				if err := encode(w, r, res.Status, res); err != nil {
+				if err := encode(w, res.Status, res); err != nil {
 					log.Printf("could not encode response: %v", err)
 				}
 				return
@@ -224,7 +216,7 @@ func handleLogin(db dbQuerier, cfg *Config) http.Handler {
 		if ok := auth.IsValid(loginCredentials.Password, registeredUser.HashedPassword); !ok {
 			res.Status = http.StatusForbidden
 			res.Error = "invalid password"
-			if err := encode(w, r, res.Status, res); err != nil {
+			if err := encode(w, res.Status, res); err != nil {
 				log.Printf("could not encode response: %v", err)
 			}
 			return
@@ -273,7 +265,7 @@ func handleLogin(db dbQuerier, cfg *Config) http.Handler {
 			}
 		}
 
-		// TODO: What if we login a user that has a revoked refreshToken? I believe that the current implementation allows successful logins 
+		// TODO: What if we login a user that has a revoked refreshToken? I believe that the current implementation allows successful logins
 		// while keeping revoked refresh tokens. Making it impossible for a user to refresh their bearer token.
 
 		// Create response body
@@ -286,7 +278,7 @@ func handleLogin(db dbQuerier, cfg *Config) http.Handler {
 			RefreshToken: refreshToken.Token,
 		}
 
-		if err := encode(w, r, http.StatusOK, responseBody); err != nil {
+		if err := encode(w, http.StatusOK, responseBody); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(http.StatusText(http.StatusInternalServerError)))
 			return
@@ -314,7 +306,7 @@ func handleCreateUser(query dbQuerier) http.Handler {
 		if ok := validEmail(newUserData.Email); !ok {
 			res.Status = http.StatusBadRequest
 			res.Error = "invalid email"
-			if err := encode(w, r, res.Status, res); err != nil {
+			if err := encode(w, res.Status, res); err != nil {
 				log.Printf("could not encode response: %v", err)
 			}
 			return
@@ -327,7 +319,7 @@ func handleCreateUser(query dbQuerier) http.Handler {
 			res.Status = http.StatusInternalServerError
 			res.Error = http.StatusText(http.StatusInternalServerError)
 
-			if err := encode(w, r, res.Status, res); err != nil {
+			if err := encode(w, res.Status, res); err != nil {
 				log.Printf("could not encode response: %v", err)
 			}
 
@@ -339,7 +331,7 @@ func handleCreateUser(query dbQuerier) http.Handler {
 			res.Status = http.StatusConflict
 			res.Error = "email is already registered"
 
-			if err := encode(w, r, res.Status, res); err != nil {
+			if err := encode(w, res.Status, res); err != nil {
 				log.Printf("could not encode response: %v", err)
 			}
 
@@ -378,7 +370,7 @@ func handleCreateUser(query dbQuerier) http.Handler {
 			return
 		}
 
-		if err := encode(w, r, statusCode, dbResponse); err != nil {
+		if err := encode(w, statusCode, dbResponse); err != nil {
 			log.Printf("error encoding response: %v", err)
 			w.WriteHeader(http.StatusInternalServerError)
 			return
@@ -396,7 +388,7 @@ func handleListUsers(query *database.Queries) http.Handler {
 			return
 		}
 
-		if err := encode(w, r, http.StatusOK, users); err != nil {
+		if err := encode(w, http.StatusOK, users); err != nil {
 			log.Printf("error encoding response: %v", err)
 			return
 		}
@@ -429,7 +421,7 @@ func handleGetUser(query dbQuerier) http.Handler {
 		// Sanitize output
 		user.HashedPassword = ""
 
-		if err := encode(w, r, http.StatusOK, user); err != nil {
+		if err := encode(w, http.StatusOK, user); err != nil {
 			log.Printf("error encoding response: %v", err)
 			return
 		}
@@ -497,7 +489,7 @@ func handleUpdateUser(query *database.Queries) http.Handler {
 			return
 		}
 
-		if err := encode(w, r, http.StatusOK, updatedUser); err != nil {
+		if err := encode(w, http.StatusOK, updatedUser); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
@@ -523,7 +515,7 @@ func handleDeleteUser(query dbQuerier) http.Handler {
 				res.Error = http.StatusText(http.StatusInternalServerError)
 				res.Status = http.StatusInternalServerError
 			}
-			encode(w, r, res.Status, res)
+			encode(w, res.Status, res)
 			return
 		}
 
@@ -534,6 +526,129 @@ func handleDeleteUser(query dbQuerier) http.Handler {
 // --- Card handlers
 
 // --- Category handlers
+
+/*
+handleCreateCategory handles the creation of a category.
+It assumes that the request.Context userId key has been set.
+*/
+func handleCreateCategory(db dbQuerier, cfg *Config) http.Handler {
+	var res response
+
+	type categoryRequestBody = struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Parse the category Name and description from the request
+		defer res.respond(w)
+
+		requestBody, err := decode[categoryRequestBody](r.Body)
+		if err != nil {
+			res.Status = http.StatusBadRequest
+			res.Error = http.StatusText(http.StatusBadRequest)
+			return
+		}
+
+		// Retrieve userId from JWT
+		userId, ok := r.Context().Value("userId").(*uuid.UUID)
+		if !ok {
+			res.Status = http.StatusBadRequest
+			res.Error = http.StatusText(http.StatusBadRequest)
+			return
+		}
+
+		// Submit to database
+		category, err := db.CreateCategory(r.Context(), database.CreateCategoryParams{
+			Name:        requestBody.Name,
+			Description: requestBody.Description,
+			CreatedBy:   *userId,
+		})
+		if err != nil {
+			res.Status = http.StatusBadRequest
+			res.Error = http.StatusText(http.StatusBadRequest)
+			return
+		}
+		
+		res.Status = http.StatusOK
+		res.Content = category
+	})
+}
+
+func handleUpdateCategory(db dbQuerier, cfg *Config) http.Handler {
+	var res response
+
+	type categoryUpdateRequestBody = struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// TODO: try out this pattern and refactor if it works
+		defer res.respond(w)
+
+		requestBody, err := decode[categoryUpdateRequestBody](r.Body)
+		if err != nil {
+			res.Status = http.StatusBadRequest
+			res.Error = http.StatusText(http.StatusBadRequest)
+			if err := encode(w, res.Status, res); err != nil {
+				log.Printf("%w: %w", ResponseFailureError, err)
+			}
+			return
+		}
+
+		// Get CategoryId from path
+		categoryId, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte("invalid id"))
+		}
+
+		existingCategory, err := db.GetCategory(r.Context(), categoryId)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				res.Status = http.StatusNotFound
+				res.Error = http.StatusText(http.StatusNotFound)
+			} else {
+				log.Printf("%w: %w", UnexpectedDbError, &err)
+				res.Status = http.StatusInternalServerError
+				res.Error = http.StatusText(http.StatusInternalServerError)
+			}
+			return
+		}
+
+		authenticatedUserId, ok := r.Context().Value("userId").(uuid.UUID)
+		if !ok {
+			// Check that the userId is not malformed
+			res.Status = http.StatusBadRequest
+			res.Error = http.StatusText(http.StatusBadRequest)
+			return
+		}
+
+		if authenticatedUserId != existingCategory.CreatedBy {
+			res.Status = http.StatusForbidden
+			res.Error = http.StatusText(http.StatusForbidden)
+			return
+		}
+
+		// Submit changes to database
+		updatedCategory, err := db.UpdateCategory(r.Context(), database.UpdateCategoryParams{
+			ID:          categoryId,
+			Name:        requestBody.Name,
+			Description: requestBody.Description,
+		})
+		if err != nil {
+			log.Printf("%w: %w", UnexpectedDbError, &err)
+			res.Status = http.StatusInternalServerError
+			res.Error = http.StatusText(http.StatusInternalServerError)
+			return
+		}
+
+		res.Status = http.StatusOK
+		res.Error = http.StatusText(http.StatusForbidden)
+		res.Content = updatedCategory
+	})
+}
 
 // --- Subscription handlers
 

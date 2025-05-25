@@ -13,17 +13,25 @@ import (
 )
 
 const createCategory = `-- name: CreateCategory :one
-INSERT INTO categories (created_at, updated_at, name)
+INSERT INTO categories (created_at, updated_at, name, description, created_by)
 VALUES (
 NOW(),
 NOW(),
-$1
+$1,
+$2,
+$3
 )
 RETURNING id, created_at, updated_at, name, description, created_by
 `
 
-func (q *Queries) CreateCategory(ctx context.Context, name string) (Category, error) {
-	row := q.db.QueryRowContext(ctx, createCategory, name)
+type CreateCategoryParams struct {
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	CreatedBy   uuid.UUID `json:"created_by"`
+}
+
+func (q *Queries) CreateCategory(ctx context.Context, arg CreateCategoryParams) (Category, error) {
+	row := q.db.QueryRowContext(ctx, createCategory, arg.Name, arg.Description, arg.CreatedBy)
 	var i Category
 	err := row.Scan(
 		&i.ID,

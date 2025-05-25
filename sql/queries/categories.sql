@@ -1,9 +1,11 @@
 -- name: CreateCategory :one
-INSERT INTO categories (created_at, updated_at, name)
+INSERT INTO categories (created_at, updated_at, name, description, created_by)
 VALUES (
 NOW(),
 NOW(),
-$1
+$1,
+$2,
+$3
 )
 RETURNING *;
 

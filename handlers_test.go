@@ -50,7 +50,7 @@ func (db fakeDatabaseQueries) DeleteUser(ctx context.Context, id uuid.UUID) (sql
 		return nil, db.err
 	}
 
-    return nil, nil
+	return nil, nil
 }
 
 func (db fakeDatabaseQueries) CreateUser(_ context.Context, _ database.CreateUserParams) (database.CreateUserRow, error) {
@@ -83,6 +83,74 @@ func (db fakeDatabaseQueries) GetUserByEmail(ctx context.Context, email string) 
 	}
 
 	return database.User{}, nil
+}
+
+// Refresh token interactions
+
+func (db fakeDatabaseQueries) CreateRefreshToken(context.Context, database.CreateRefreshTokenParams) (database.RefreshToken, error) {
+	if db.err != nil {
+		return database.RefreshToken{}, db.err
+	}
+	return database.RefreshToken{}, nil
+}
+
+func (db fakeDatabaseQueries) UpdateRefreshToken(context.Context, database.UpdateRefreshTokenParams) (database.RefreshToken, error){
+	if db.err != nil {
+		return database.RefreshToken{}, db.err
+	}
+	return database.RefreshToken{}, nil
+
+}
+
+func (db fakeDatabaseQueries) RevokeRefreshToken(context.Context, uuid.UUID) (database.RefreshToken, error){
+	if db.err != nil {
+		return database.RefreshToken{}, db.err
+	}
+	return database.RefreshToken{}, nil
+
+}
+
+func (db fakeDatabaseQueries) GetRefreshToken(context.Context, uuid.UUID) (database.RefreshToken, error){
+	if db.err != nil {
+		return database.RefreshToken{}, db.err
+	}
+	return database.RefreshToken{}, nil
+}
+
+// Category interactions
+func (db fakeDatabaseQueries) UpdateCategory(context.Context, database.UpdateCategoryParams) (database.Category, error) {
+	if db.err != nil {
+		return database.Category{}, db.err
+	}
+	return database.Category{}, nil
+}
+
+func (db fakeDatabaseQueries) ResetCategories(context.Context) ([]database.Category, error) {
+	if db.err != nil {
+		return nil, db.err
+	}
+	return nil, nil
+}
+
+func (db fakeDatabaseQueries) ListCategories(context.Context) ([]database.Category, error) {
+	if db.err != nil {
+		return nil, db.err
+	}
+	return nil, nil
+}
+
+func (db fakeDatabaseQueries) GetCategory(context.Context, uuid.UUID) (database.Category, error) {
+	if db.err != nil {
+		return database.Category{}, db.err
+	}
+	return database.Category{}, nil
+}
+
+func (db fakeDatabaseQueries) CreateCategory(context.Context, database.CreateCategoryParams) (database.Category, error) {
+	if db.err != nil {
+		return database.Category{}, db.err
+	}
+	return database.Category{}, nil
 }
 
 func TestHandlerDeleteUser(t *testing.T) {
@@ -302,7 +370,6 @@ func newDeleteUserRequest(id string) *http.Request {
 	req, _ := http.NewRequest(http.MethodDelete, "/api/users/"+id, nil)
 	return req
 }
-
 
 func assertStatusCode(t testing.TB, got, want int) {
 	t.Helper()

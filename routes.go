@@ -19,15 +19,16 @@ func addRoutes(
 	//
 	// -- Authentication handlers
 	mux.Handle("POST /api/login", handleLogin(dbStore, config))
-	mux.Handle("POST /api/refresh", handleRefresh(dbStore, config))
-	mux.Handle("POST /api/revoke", handleRevoke(dbStore, config))
+	mux.Handle("POST /api/refresh", authenticate(handleRefresh(dbStore, config), config.JWTSecret))
+	mux.Handle("POST /api/revoke", authenticate(handleRevoke(dbStore, config), config.JWTSecret))
 
 	// -- Users
 	mux.Handle("POST /api/users", handleCreateUser(dbStore))
-	mux.Handle("GET /api/users", handleListUsers(dbStore))
-	mux.Handle("GET /api/users/{id}", handleGetUser(dbStore))
-	mux.Handle("PUT /api/users/{id}", handleUpdateUser(dbStore))
-	mux.Handle("DELETE /api/users/{id}", handleDeleteUser(dbStore))
+	// --- Authenticated user handlers
+	mux.Handle("GET /api/users", authenticate(handleListUsers(dbStore), config.JWTSecret))
+	mux.Handle("GET /api/users/{id}", authenticate(handleGetUser(dbStore), config.JWTSecret))
+	mux.Handle("PUT /api/users/{id}", authenticate(handleUpdateUser(dbStore), config.JWTSecret))
+	mux.Handle("DELETE /api/users/{id}", authenticate(handleDeleteUser(dbStore), config.JWTSecret))
 
 	// -- Categories
 

@@ -13,7 +13,7 @@ func validEmail(email string) bool {
 	return err == nil
 }
 
-func encode[T any](w http.ResponseWriter, _ *http.Request, status int, v T) error {
+func encode[T any](w http.ResponseWriter, status int, v T) error {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(v); err != nil {

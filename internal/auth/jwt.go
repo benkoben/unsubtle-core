@@ -89,22 +89,3 @@ func MakeRefreshToken() (string, error) {
 	n, _ := random.Read(bToken)
 	return hex.EncodeToString(bToken[:n]), nil
 }
-
-/*
-    Retrieves the APIKEY token from HTTP headers. If no Authorization header is found, or if the header is
-    not formated correctly an error is returned.
-*/
-func GetAPIKey(headers http.Header)(string, error) {
-
-    headerVal := headers.Get("Authorization")
-    if headerVal == "" {
-        return "", errors.New("Authorization header is not set")
-    }
-
-    keyVal := strings.Fields(headerVal)
-    if keyVal[0] != "ApiKey" {
-        return "", errors.New("invalid bearer token format")
-    }
-
-    return keyVal[1], nil
-}
