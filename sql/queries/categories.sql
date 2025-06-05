@@ -13,6 +13,11 @@ RETURNING *;
 SELECT * FROM categories
 ORDER BY name ASC;
 
+-- name: ListCategoriesForUserId :many
+SELECT * FROM categories
+WHERE created_by = $1
+ORDER BY name ASC;
+
 -- name: GetCategory :one
 SELECT * FROM categories
 WHERE id = $1;

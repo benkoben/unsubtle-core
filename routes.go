@@ -12,9 +12,6 @@ func addRoutes(
 	dbStore *database.Queries,
 	// --- More different stores can be added below if necessary
 ) {
-	// Frontend request are defined below
-	mux.Handle("GET /", handleHelloWorld(config))
-
 	// API requests are defined below
 	//
 	// -- Authentication handlers
@@ -31,6 +28,11 @@ func addRoutes(
 	mux.Handle("DELETE /api/users/{id}", authenticate(handleDeleteUser(dbStore), config.JWTSecret))
 
 	// -- Categories
+	mux.Handle("POST /api/categories", authenticate(handleCreateCategory(dbStore), config.JWTSecret))
+	mux.Handle("PUT /api/categories/{id}", authenticate(handleUpdateCategory(dbStore), config.JWTSecret))
+	mux.Handle("GET /api/categories", authenticate(handleListCategory(dbStore), config.JWTSecret))
+	mux.Handle("GET /api/categories/{id}", authenticate(handleGetCategory(dbStore), config.JWTSecret))
+	mux.Handle("DELETE /api/categories/{id}", authenticate(handleDeleteCategory(dbStore), config.JWTSecret))
 
 	// -- Subscriptions
 

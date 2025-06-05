@@ -62,9 +62,11 @@ type Subscription struct {
 	Name           string         `json:"name"`
 	CreatedAt      time.Time      `json:"created_at"`
 	UpdatedAt      time.Time      `json:"updated_at"`
-	MonthlyCostSek int32          `json:"monthly_cost_sek"`
+	MonthlyCost    int32          `json:"monthly_cost"`
+	Currency       string         `json:"currency"`
 	UnsubscribeUrl sql.NullString `json:"unsubscribe_url"`
-	CategoryID     uuid.UUID      `json:"category_id"`
+	Description    sql.NullString `json:"description"`
+	CategoryID     uuid.NullUUID  `json:"category_id"`
 	CreatedBy      uuid.UUID      `json:"created_by"`
 }
 

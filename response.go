@@ -1,10 +1,8 @@
 package main
 
 import (
-	"encoding/json"
-	"log"
+	"fmt"
 	"net/http"
-	"github.com/benkoben/unsubtle-core/internal/database"
 )
 
 type response struct {
@@ -13,18 +11,9 @@ type response struct {
 	Error   string `json:"error,omitempty"`
 }
 
-func (res *response) respond(w http.ResponseWriter) {
-	
-	if res.Content != nil {
-		body, err := json.Marshal(res.Content)
-		if err != nil {
-			log.Printf("%s: %s", MarhalResponseBodyError, err)
-		}
-		res.Content = string(body)
-	}
-
+func (res *response) respond(w http.ResponseWriter) error {
 	if err := encode(w, res.Status, res); err != nil {
-		log.Printf("%w: %w", ResponseFailureError, err)
+		return fmt.Errorf("%w: %w", ResponseFailureError, err)
 	}
+	return nil
 }
-

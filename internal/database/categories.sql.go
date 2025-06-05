@@ -107,6 +107,42 @@ func (q *Queries) ListCategories(ctx context.Context) ([]Category, error) {
 	return items, nil
 }
 
+const listCategoriesForUserId = `-- name: ListCategoriesForUserId :many
+SELECT id, created_at, updated_at, name, description, created_by FROM categories
+WHERE created_by = $1
+ORDER BY name ASC
+`
+
+func (q *Queries) ListCategoriesForUserId(ctx context.Context, createdBy uuid.UUID) ([]Category, error) {
+	rows, err := q.db.QueryContext(ctx, listCategoriesForUserId, createdBy)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Category
+	for rows.Next() {
+		var i Category
+		if err := rows.Scan(
+			&i.ID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Name,
+			&i.Description,
+			&i.CreatedBy,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const resetCategories = `-- name: ResetCategories :many
 DELETE FROM categories
 RETURNING id, created_at, updated_at, name, description, created_by
