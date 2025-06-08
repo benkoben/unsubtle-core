@@ -22,6 +22,10 @@ ORDER BY name ASC;
 SELECT * FROM categories
 WHERE id = $1;
 
+-- name: CheckExistingCategory :one
+SELECT * FROM categories
+WHERE name = $1 AND created_by = $2;
+
 -- name: DeleteCategory :execresult
 DELETE FROM categories
 WHERE id = $1;

@@ -15,13 +15,13 @@ func addRoutes(
 	// API requests are defined below
 	//
 	// -- Authentication handlers
-	mux.Handle("POST /api/login", handleLogin(dbStore, config))
-	mux.Handle("POST /api/refresh", authenticate(handleRefresh(dbStore, config), config.JWTSecret))
-	mux.Handle("POST /api/revoke", authenticate(handleRevoke(dbStore, config), config.JWTSecret))
+	mux.Handle("POST /login", handleLogin(dbStore, config))
+	mux.Handle("POST /refresh", authenticate(handleRefresh(dbStore, config), config.JWTSecret))
+	mux.Handle("POST /revoke", authenticate(handleRevoke(dbStore, config), config.JWTSecret))
+	mux.Handle("POST /register", handleCreateUser(dbStore))
 
 	// -- Users
-	mux.Handle("POST /api/users", handleCreateUser(dbStore))
-	// --- Authenticated user handlers
+	// TODO: Authorization (These handlers should only be available to admin users)
 	mux.Handle("GET /api/users", authenticate(handleListUsers(dbStore), config.JWTSecret))
 	mux.Handle("GET /api/users/{id}", authenticate(handleGetUser(dbStore), config.JWTSecret))
 	mux.Handle("PUT /api/users/{id}", authenticate(handleUpdateUser(dbStore), config.JWTSecret))
@@ -35,6 +35,18 @@ func addRoutes(
 	mux.Handle("DELETE /api/categories/{id}", authenticate(handleDeleteCategory(dbStore), config.JWTSecret))
 
 	// -- Subscriptions
+	mux.Handle("POST /api/subscriptions", authenticate(handleCreateSubscription(dbStore), config.JWTSecret))
+	mux.Handle("PUT /api/subscriptions/{id}", authenticate(handleUpdateSubscription(dbStore), config.JWTSecret))
+	mux.Handle("GET /api/subscriptions", authenticate(handleListSubscription(dbStore), config.JWTSecret))
+	mux.Handle("GET /api/subscriptions/{id}", authenticate(handleGetSubscription(dbStore), config.JWTSecret))
+	mux.Handle("DELETE /api/subscriptions/{id}", authenticate(handleDeleteSubscription(dbStore), config.JWTSecret))
+
+	// -- Cards
+	mux.Handle("POST /api/cards", authenticate(handleCreateCard(dbStore), config.JWTSecret))
+	mux.Handle("GET /api/cards/{id}", authenticate(handleGetCard(dbStore), config.JWTSecret))
+	mux.Handle("GET /api/cards", authenticate(handleListCards(dbStore), config.JWTSecret))
+	mux.Handle("PUT /api/cards/{id}", authenticate(handleUpdateCard(dbStore), config.JWTSecret))
+	mux.Handle("DELETE /api/cards/{id}", authenticate(handleDeleteCard(dbStore), config.JWTSecret))
 
 	// -- ActiveSubscriptions
 

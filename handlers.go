@@ -1,8 +1,8 @@
 package main
 
 import (
-	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -32,61 +32,6 @@ var (
 	passwordBase          = math.Pow(float64(minPasswordComplexity), float64(minPasswordLength))
 	minEntropy            = math.Log2(passwordBase)
 )
-
-// dbQuerier is an interface that allows us to use dependency injection on handlers.
-// It's purpose is to enable self-contained unit testing. While this wont allow us to test queries, it does allow us to test the logic defined within a handler.
-type dbQuerier interface {
-	// User interactions
-	GetUserById(context.Context, uuid.UUID) (database.User, error)
-	CreateUser(context.Context, database.CreateUserParams) (database.CreateUserRow, error)
-	GetUserByEmail(context.Context, string) (database.User, error)
-	DeleteUser(context.Context, uuid.UUID) (sql.Result, error)
-
-	// RefreshToken interactions
-	CreateRefreshToken(context.Context, database.CreateRefreshTokenParams) (database.RefreshToken, error)
-	UpdateRefreshToken(context.Context, database.UpdateRefreshTokenParams) (database.RefreshToken, error)
-	RevokeRefreshToken(context.Context, uuid.UUID) (database.RefreshToken, error)
-	GetRefreshToken(context.Context, uuid.UUID) (database.RefreshToken, error)
-
-	// Subscription interactions
-	CreateSubscription(ctx context.Context, arg database.CreateSubscriptionParams) (database.Subscription, error)
-	DeleteSubscription(ctx context.Context, id uuid.UUID) (sql.Result, error)
-	GetSubscription(ctx context.Context, id uuid.UUID) (database.Subscription, error)
-	ListSubscriptions(ctx context.Context) ([]database.Subscription, error)
-	ListSubscriptionsForUserId(ctx context.Context, createdBy uuid.UUID) ([]database.Subscription, error)
-	ResetSubscriptions(ctx context.Context) ([]database.Subscription, error)
-	UpdateSubscription(ctx context.Context, arg database.UpdateSubscriptionParams) (database.Subscription, error)
-
-	// Category interactions
-	UpdateCategory(context.Context, database.UpdateCategoryParams) (database.Category, error)
-	ResetCategories(context.Context) ([]database.Category, error) // TODO - implement this
-	ListCategories(context.Context) ([]database.Category, error)
-	GetCategory(context.Context, uuid.UUID) (database.Category, error)
-	CreateCategory(context.Context, database.CreateCategoryParams) (database.Category, error)
-	ListCategoriesForUserId(ctx context.Context, createdBy uuid.UUID) ([]database.Category, error)
-	DeleteCategory(ctx context.Context, id uuid.UUID) (sql.Result, error)
-
-	// Card interactions
-
-	// ActiveTrails interactions
-
-	// ActiveSubscriptions interactions
-}
-
-// -- Data that is expected by various requests
-type userRequestData struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
-}
-
-type loginResponseData struct {
-	Id           uuid.UUID `json:"id"`
-	Email        string    `json:"email,omitempty"`
-	CreatedAt    time.Time `json:"created_at,omitempty"`
-	UpdatedAt    time.Time `json:"updated_at,omitempty"`
-	Token        string    `json:"token"`
-	RefreshToken string    `json:"refresh_token"`
-}
 
 // --- Authentication handlers
 func handleRevoke(db dbQuerier, cfg *Config) http.Handler {
@@ -509,6 +454,7 @@ func handleDeleteUser(query dbQuerier) http.Handler {
 	var res response
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer res.respond(w)
 		// Parse id from URL query
 		id, err := uuid.Parse(r.PathValue("id"))
 		if err != nil {
@@ -517,22 +463,250 @@ func handleDeleteUser(query dbQuerier) http.Handler {
 		}
 
 		if _, err := query.DeleteUser(r.Context(), id); err != nil {
-			if err == sql.ErrNoRows {
-				res.Error = "id not found"
+			if errors.Is(err, sql.ErrNoRows) {
+				res.Error = "user not found"
 				res.Status = http.StatusNotFound
 			} else {
 				res.Error = http.StatusText(http.StatusInternalServerError)
 				res.Status = http.StatusInternalServerError
 			}
-			encode(w, res.Status, res)
 			return
 		}
-
-		w.WriteHeader(http.StatusNoContent)
+		res.Status = http.StatusOK
 	})
 }
 
 // --- Card handlers
+func handleListCards(query *database.Queries) http.Handler {
+	var res response
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer res.respond(w)
+
+		userId, ok := r.Context().Value(userIdCtxKey).(uuid.UUID)
+		if !ok {
+			res.Error = http.StatusText(http.StatusForbidden)
+			res.Status = http.StatusForbidden
+			return
+		}
+
+		// TODO: Authorization should be added to differentiate between all and user specific database entries.
+		dbCards, err := query.ListCardsForOwner(r.Context(), userId)
+		if err != nil {
+			res.Error = http.StatusText(http.StatusInternalServerError)
+			res.Status = http.StatusInternalServerError
+			return
+		}
+
+		if err := encode(w, http.StatusOK, dbCards); err != nil {
+			log.Printf("error encoding response: %v", err)
+			return
+		}
+	})
+}
+
+func handleDeleteCard(query dbQuerier) http.Handler {
+	var res response
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer res.respond(w)
+
+		userId, ok := r.Context().Value(userIdCtxKey).(uuid.UUID)
+		if !ok {
+			res.Error = http.StatusText(http.StatusForbidden)
+			res.Status = http.StatusForbidden
+			return
+		}
+
+		id, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			res.Error = "invalid id"
+			res.Status = http.StatusBadRequest
+		}
+
+		card, err := query.GetCard(r.Context(), id)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				res.Error = http.StatusText(http.StatusNotFound)
+				res.Status = http.StatusNotFound
+				return
+			}
+			res.Error = http.StatusText(http.StatusInternalServerError)
+			res.Status = http.StatusInternalServerError
+			return
+		}
+		if card.Owner != userId {
+			res.Error = http.StatusText(http.StatusForbidden)
+			res.Status = http.StatusForbidden
+		}
+
+		if _, err := query.DeleteCard(r.Context(), id); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				res.Error = http.StatusText(http.StatusNotFound)
+				res.Status = http.StatusNotFound
+				return
+			}
+			res.Error = http.StatusText(http.StatusInternalServerError)
+			res.Status = http.StatusInternalServerError
+			return
+		}
+		res.Status = http.StatusNoContent
+	})
+}
+
+func handleCreateCard(db dbQuerier) http.Handler {
+	var res response
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer res.respond(w)
+
+		userId, ok := r.Context().Value(userIdCtxKey).(uuid.UUID)
+		if !ok {
+			res.Error = http.StatusText(http.StatusForbidden)
+			res.Status = http.StatusForbidden
+			return
+		}
+
+		newCard, err := decode[cardRequests](r.Body)
+		if err != nil {
+			res.Error = http.StatusText(http.StatusBadRequest)
+			res.Status = http.StatusBadRequest
+			return
+		}
+
+		if _, err := db.GetCardByName(r.Context(), database.GetCardByNameParams{
+			Name:  newCard.Name,
+			Owner: userId,
+		}); err != nil {
+			// If the card does not exist, this is a good thing. Otherwise something unexpected happened
+			if !errors.Is(err, sql.ErrNoRows) {
+				log.Printf("error getting existing card: %v", err)
+				res.Error = http.StatusText(http.StatusInternalServerError)
+				res.Status = http.StatusInternalServerError
+				return
+			}
+		}
+
+		card, err := db.CreateCard(r.Context(), database.CreateCardParams{
+			Name:      newCard.Name,
+			ExpiresAt: newCard.ExpiresAt,
+			Owner:     userId,
+		})
+
+		if err != nil {
+			res.Error = http.StatusText(http.StatusInternalServerError)
+			res.Status = http.StatusInternalServerError
+			return
+		}
+
+		if err := encode(w, http.StatusCreated, card); err != nil {
+			log.Printf("error encoding response: %v", err)
+			return
+		}
+	})
+}
+
+func handleGetCard(query dbQuerier) http.Handler {
+	var res response
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer res.respond(w)
+		userId, ok := r.Context().Value(userIdCtxKey).(uuid.UUID)
+		if !ok {
+			res.Error = http.StatusText(http.StatusForbidden)
+			res.Status = http.StatusForbidden
+			return
+		}
+
+		id, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			res.Error = "invalid id"
+			res.Status = http.StatusBadRequest
+		}
+
+		card, err := query.GetCard(r.Context(), id)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				res.Error = http.StatusText(http.StatusNotFound)
+				res.Status = http.StatusNotFound
+				return
+			}
+			res.Error = http.StatusText(http.StatusInternalServerError)
+			res.Status = http.StatusInternalServerError
+			return
+		}
+		if card.Owner != userId {
+			res.Error = http.StatusText(http.StatusForbidden)
+			res.Status = http.StatusForbidden
+			return
+		}
+
+		if err := encode(w, http.StatusOK, card); err != nil {
+			log.Printf("error encoding response: %v", err)
+			return
+		}
+	})
+}
+
+func handleUpdateCard(db dbQuerier) http.Handler {
+	var res response
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer res.respond(w)
+
+		userId, ok := r.Context().Value(userIdCtxKey).(uuid.UUID)
+		if !ok {
+			res.Error = http.StatusText(http.StatusForbidden)
+			res.Status = http.StatusForbidden
+			return
+		}
+
+		id, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			res.Error = "invalid id"
+			res.Status = http.StatusBadRequest
+			return
+		}
+
+		existingCard, err := db.GetCard(r.Context(), id)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				res.Error = http.StatusText(http.StatusNotFound)
+				res.Status = http.StatusNotFound
+				return
+			}
+			log.Printf("error getting existing card: %v", err)
+			res.Error = http.StatusText(http.StatusInternalServerError)
+			res.Status = http.StatusInternalServerError
+			return
+		}
+		if existingCard.Owner != userId {
+			res.Error = http.StatusText(http.StatusForbidden)
+			res.Status = http.StatusForbidden
+			return
+		}
+
+		requestBody, err := decode[cardRequests](r.Body)
+		if err != nil {
+			res.Error = http.StatusText(http.StatusBadRequest)
+			res.Status = http.StatusBadRequest
+			return
+		}
+
+		card, err := db.UpdateCard(r.Context(), database.UpdateCardParams{
+			Name:      requestBody.Name,
+			ExpiresAt: requestBody.ExpiresAt,
+		})
+		if err != nil {
+			log.Printf("error updating card: %v", err)
+			res.Error = http.StatusText(http.StatusInternalServerError)
+			res.Status = http.StatusInternalServerError
+			return
+		}
+
+		if err := encode(w, http.StatusOK, card); err != nil {
+			log.Printf("error encoding response: %v", err)
+			return
+		}
+	})
+}
 
 // --- Category handlers
 
@@ -561,7 +735,7 @@ func handleCreateCategory(db dbQuerier) http.Handler {
 		}
 
 		// Retrieve userId from Context (set by middleware)
-		val := r.Context().Value("userId")
+		val := r.Context().Value(userIdCtxKey)
 		if val == nil {
 			log.Println("could not retrieve userId from context")
 			res.Status = http.StatusBadRequest
@@ -569,6 +743,21 @@ func handleCreateCategory(db dbQuerier) http.Handler {
 			return
 		}
 		userId := val.(uuid.UUID)
+
+		if _, err := db.CheckExistingCategory(r.Context(), database.CheckExistingCategoryParams{
+			Name:      requestBody.Name,
+			CreatedBy: userId,
+		}); err != nil {
+			if !errors.Is(err, sql.ErrNoRows) {
+				res.Error = http.StatusText(http.StatusInternalServerError)
+				res.Status = http.StatusInternalServerError
+				return
+			}
+		} else {
+			res.Content = "category already exists"
+			res.Status = http.StatusConflict
+			return
+		}
 
 		// Submit to database
 		category, err := db.CreateCategory(r.Context(), database.CreateCategoryParams{
@@ -630,7 +819,7 @@ func handleUpdateCategory(db dbQuerier) http.Handler {
 			return
 		}
 
-		authenticatedUserId, ok := r.Context().Value("userId").(uuid.UUID)
+		authenticatedUserId, ok := r.Context().Value(userIdCtxKey).(uuid.UUID)
 		if !ok {
 			// Check that the userId is not malformed
 			res.Status = http.StatusBadRequest
@@ -672,7 +861,7 @@ func handleListCategory(db dbQuerier) http.Handler {
 		// - Normal user = ListByUserID
 
 		// Retrieve userId from Context (set by middleware)
-		val := r.Context().Value("userId")
+		val := r.Context().Value(userIdCtxKey)
 		if val == nil {
 			log.Println("could not retrieve userId from context")
 			res.Status = http.StatusBadRequest
@@ -700,7 +889,7 @@ func handleGetCategory(db dbQuerier) http.Handler {
 		defer res.respond(w)
 
 		// Retrieve the currently authenticated user from context
-		val := r.Context().Value("userId")
+		val := r.Context().Value(userIdCtxKey)
 		if val == nil {
 			log.Println("could not retrieve userId from context")
 			res.Status = http.StatusBadRequest
@@ -745,7 +934,7 @@ func handleDeleteCategory(db dbQuerier) http.Handler {
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Retrieve the currently authenticated user from context
-		val := r.Context().Value("userId")
+		val := r.Context().Value(userIdCtxKey)
 		if val == nil {
 			log.Println("could not retrieve userId from context")
 			res.Status = http.StatusBadRequest
@@ -801,18 +990,19 @@ func handleDeleteCategory(db dbQuerier) http.Handler {
 func handleCreateSubscription(db dbQuerier) http.Handler {
 	var res response
 
-	type subscriptionRequest struct {
-		Name string `json:"name"`
-		MonthlyCost string `json:"monthly_cost"`
-		Currency string `json:"currency"`
-		UnsubscribeUrl string `json:"unsubscribe_url,omitempty"`
-		Description string `json:"description,omitempty"`
-		CategoryId string `json:"category_id,omitempty"`
-	}
-
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Parse the email and password from the request body
 		defer r.Body.Close()
+
+		// Retrieve userId from Context (set by middleware)
+		val := r.Context().Value(userIdCtxKey)
+		if val == nil {
+			log.Println("could not retrieve userId from context")
+			res.Status = http.StatusBadRequest
+			res.Error = http.StatusText(http.StatusBadRequest)
+			return
+		}
+		userId := val.(uuid.UUID)
 
 		newSubscriptionData, err := decode[subscriptionRequest](r.Body)
 		if err != nil {
@@ -821,9 +1011,12 @@ func handleCreateSubscription(db dbQuerier) http.Handler {
 			return
 		}
 
-		// Check if the email is already registered
-		existingSubscription, err := db.GetSubscriptionByNameAndCreator(r.Context(), newUserData.Email)
-		if err != nil && err != sql.ErrNoRows {
+		// Check if the subscriptions is already registered
+		existingSubscription, err := db.GetSubscriptionByNameAndCreator(r.Context(), database.GetSubscriptionByNameAndCreatorParams{
+			CreatedBy: userId,
+			Name:      newSubscriptionData.Name,
+		})
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			// If any error other than ErrNoRows is returned this means something unexpected happened.
 			res.Status = http.StatusInternalServerError
 			res.Error = http.StatusText(http.StatusInternalServerError)
@@ -835,10 +1028,10 @@ func handleCreateSubscription(db dbQuerier) http.Handler {
 			return
 		}
 
-		// If existingUser contains data, this means there already exists a database entry for the requested email
-		if existingUser.Email != "" {
+		// If existingSubscription contains data, this means there already exists a database entry for the requested email
+		if existingSubscription.Name != "" {
 			res.Status = http.StatusConflict
-			res.Error = "email is already registered"
+			res.Error = "subscription is already registered"
 
 			if err := encode(w, res.Status, res); err != nil {
 				log.Printf("could not encode response: %v", err)
@@ -847,31 +1040,18 @@ func handleCreateSubscription(db dbQuerier) http.Handler {
 			return
 		}
 
-		// Validate the password criteria
-		if err := passwordvalidator.Validate(newUserData.Password, minEntropy); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			_, err := w.Write(fmt.Appendf([]byte{}, "invalid password: %v", err))
-			if err != nil {
-				log.Printf("error writing response: %v", err)
-			}
-			return
-		}
-
-		// Hash the password
-		hash, err := auth.CreateHash(newUserData.Password)
-		if err != nil {
-			log.Printf("error hashing password: %v", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-
 		// Save the user to the database
-		createUserParams := database.CreateUserParams{
-			Email:          newUserData.Email,
-			HashedPassword: hash,
+		createSubscriptionParams := database.CreateSubscriptionParams{
+			CreatedBy:      userId,
+			Name:           newSubscriptionData.Name,
+			MonthlyCost:    newSubscriptionData.MonthlyCost,
+			Currency:       newSubscriptionData.Currency,
+			Description:    newSubscriptionData.Description,
+			UnsubscribeUrl: newSubscriptionData.UnsubscribeUrl,
+			CategoryID:     newSubscriptionData.CategoryId,
 		}
 
-		dbResponse, err := query.CreateUser(r.Context(), createUserParams)
+		dbResponse, err := db.CreateSubscription(r.Context(), createSubscriptionParams)
 		statusCode := http.StatusCreated
 		if err != nil {
 			log.Printf("error creating user: %v", err)
@@ -887,6 +1067,212 @@ func handleCreateSubscription(db dbQuerier) http.Handler {
 	})
 }
 
+func handleDeleteSubscription(db dbQuerier) http.Handler {
+	var res response
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Retrieve the currently authenticated user from context
+		val := r.Context().Value(userIdCtxKey)
+		if val == nil {
+			log.Println("could not retrieve userId from context")
+			res.Status = http.StatusBadRequest
+			res.Error = http.StatusText(http.StatusBadRequest)
+			return
+		}
+		userId := val.(uuid.UUID)
+
+		// Parse id from URL path
+		id, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte("invalid id"))
+			return
+		}
+
+		// Retrieve the existing category
+		subscription, err := db.GetSubscription(r.Context(), id)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		// Check if the currently authenticated user is allowed to delete
+		if subscription.CreatedBy != userId {
+			res.Status = http.StatusForbidden
+			res.Error = http.StatusText(http.StatusForbidden)
+			return
+		}
+
+		// Delete the category
+		if _, err := db.DeleteSubscription(r.Context(), id); err != nil {
+			if err == sql.ErrNoRows {
+				res.Error = http.StatusText(http.StatusNotFound)
+				res.Status = http.StatusNotFound
+			} else {
+				res.Error = http.StatusText(http.StatusInternalServerError)
+				res.Status = http.StatusInternalServerError
+			}
+			encode(w, res.Status, res)
+			return
+		}
+
+		res.Status = http.StatusNoContent
+	})
+}
+
+func handleGetSubscription(db dbQuerier) http.Handler {
+	var res response
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer res.respond(w)
+
+		// Retrieve the currently authenticated user from context
+		val := r.Context().Value(userIdCtxKey)
+		if val == nil {
+			log.Println("could not retrieve userId from context")
+			res.Status = http.StatusBadRequest
+			res.Error = http.StatusText(http.StatusBadRequest)
+			return
+		}
+		userId := val.(uuid.UUID)
+
+		// Parse id from URL path
+		log.Println(r.PathValue("id"))
+		log.Println(r.URL.String())
+		id, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte("invalid id"))
+			return
+		}
+
+		subscription, err := db.GetSubscription(r.Context(), id)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		if subscription.CreatedBy != userId {
+			res.Status = http.StatusForbidden
+			res.Error = http.StatusText(http.StatusForbidden)
+			return
+		}
+
+		res.Status = http.StatusOK
+		res.Content = subscription
+	})
+}
+
+func handleListSubscription(db dbQuerier) http.Handler {
+	var res response
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer res.respond(w)
+
+		// TODO: In future we can do role filtering
+		// - Admin = ListAllCategories
+		// - Normal user = ListByUserID
+
+		// Retrieve userId from Context (set by middleware)
+		val := r.Context().Value(userIdCtxKey)
+		if val == nil {
+			log.Println("could not retrieve userId from context")
+			res.Status = http.StatusBadRequest
+			res.Error = http.StatusText(http.StatusBadRequest)
+			return
+		}
+		userId := val.(uuid.UUID)
+
+		categories, err := db.ListSubscriptionsForUserId(r.Context(), userId)
+		if err != nil {
+			log.Printf("%v: %v", UnexpectedDbError, &err)
+			res.Status = http.StatusInternalServerError
+			res.Error = http.StatusText(http.StatusInternalServerError)
+			return
+		}
+
+		res.Status = http.StatusOK
+		res.Content = categories
+	})
+}
+
+func handleUpdateSubscription(db dbQuerier) http.Handler {
+	var res response
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer res.respond(w)
+
+		requestBody, err := decode[subscriptionRequest](r.Body)
+		if err != nil {
+			res.Status = http.StatusBadRequest
+			res.Error = http.StatusText(http.StatusBadRequest)
+			if err := encode(w, res.Status, res); err != nil {
+				log.Printf("%w: %w", ResponseFailureError, err)
+			}
+			return
+		}
+
+		// Get CategoryId from path
+		subscriptionId, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte("invalid id"))
+		}
+
+		existingSubscription, err := db.GetSubscription(r.Context(), subscriptionId)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				res.Status = http.StatusNotFound
+				res.Error = http.StatusText(http.StatusNotFound)
+			} else {
+				log.Printf("%v: %v", UnexpectedDbError, &err)
+				res.Status = http.StatusInternalServerError
+				res.Error = http.StatusText(http.StatusInternalServerError)
+			}
+			return
+		}
+
+		authenticatedUserId, ok := r.Context().Value(userIdCtxKey).(uuid.UUID)
+		if !ok {
+			// Will fail if the userId value cannot be cast into an uuid.UUID
+			res.Status = http.StatusBadRequest
+			res.Error = http.StatusText(http.StatusBadRequest)
+			return
+		}
+
+		if authenticatedUserId != existingSubscription.CreatedBy {
+			res.Status = http.StatusForbidden
+			res.Error = http.StatusText(http.StatusForbidden)
+			return
+		}
+
+		// Submit changes to database
+		updatedSubscription, err := db.UpdateSubscription(r.Context(), database.UpdateSubscriptionParams{
+			ID:             subscriptionId,
+			Name:           requestBody.Name,
+			MonthlyCost:    requestBody.MonthlyCost,
+			Currency:       requestBody.Currency,
+			UnsubscribeUrl: requestBody.UnsubscribeUrl,
+			Description:    requestBody.Description,
+			CategoryID:     requestBody.CategoryId,
+		})
+		if err != nil {
+			log.Printf("%v: %v", UnexpectedDbError, &err)
+			res.Status = http.StatusInternalServerError
+			res.Error = http.StatusText(http.StatusInternalServerError)
+			return
+		}
+
+		res.Status = http.StatusOK
+		res.Content = updatedSubscription
+	})
+}
 
 // --- Active subscription handlers
 
