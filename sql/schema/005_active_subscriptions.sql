@@ -1,5 +1,6 @@
 -- +goose Up
 CREATE TABLE active_subscriptions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     subscription_id UUID NOT NULL,
     user_id UUID NOT NULL,
     card_id UUID NOT NULL,

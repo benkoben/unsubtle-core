@@ -5,3 +5,7 @@ Unsubtle-core is the data layer of the unsubtle app. The service exposes various
 # Features
 
 # Database
+
+```
+postgres://postgres:postgres@localhost:5432/unsubtle?sslmode=disable
+```

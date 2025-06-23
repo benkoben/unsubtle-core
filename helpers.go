@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+    "io"
 	"net/mail"
 )
 
@@ -12,7 +13,7 @@ func validEmail(email string) bool {
 	return err == nil
 }
 
-func encode[T any](w http.ResponseWriter, r *http.Request, status int, v T) error {
+func encode[T any](w http.ResponseWriter, status int, v T) error {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
@@ -21,9 +22,9 @@ func encode[T any](w http.ResponseWriter, r *http.Request, status int, v T) erro
 	return nil
 }
 
-func decode[T any](w http.ResponseWriter, r *http.Request) (T, error) {
+func decode[T any](r io.Reader) (T, error) {
 	var v T
-	if err := json.NewDecoder(r.Body).Decode(&v); err != nil {
+	if err := json.NewDecoder(r).Decode(&v); err != nil {
 		return v, fmt.Errorf("decoding JSON: %w", err)
 	}
 	return v, nil
