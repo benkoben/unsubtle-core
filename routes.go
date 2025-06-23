@@ -49,6 +49,9 @@ func addRoutes(
 	mux.Handle("DELETE /api/cards/{id}", authenticate(handleDeleteCard(dbStore), config.JWTSecret))
 
 	// -- ActiveSubscriptions
+	mux.Handle("GET /api/activesubscriptions/{id}", authenticate(handleGetActiveSubscription(dbStore), config.JWTSecret))
+	mux.Handle("GET /api/activesubscriptions", authenticate(handleListActiveSubscription(dbStore), config.JWTSecret))
+	mux.Handle("PUT /api/activesubscriptions/{id}", authenticate(handleUpdateActiveSubscription(dbStore), config.JWTSecret))
 
 	// -- ActiveTrails
 }

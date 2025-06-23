@@ -12,6 +12,7 @@ import (
 )
 
 type ActiveSubscription struct {
+	ID               uuid.UUID    `json:"id"`
 	SubscriptionID   uuid.UUID    `json:"subscription_id"`
 	UserID           uuid.UUID    `json:"user_id"`
 	CardID           uuid.UUID    `json:"card_id"`

@@ -30,7 +30,12 @@ type subscriptionRequest struct {
 	CategoryId     uuid.NullUUID  `json:"category_id,omitempty"`
 }
 
-type cardRequests struct {
+type cardRequest struct {
 	Name      string    `json:"name"`
 	ExpiresAt time.Time `json:"expires_at"`
+}
+
+type activeSubscriptionUpdateRequest struct {
+	BillingFrequency string `json:"billing_frequency"`
+	AutoRenewEnabled *bool  `json:"auto_renew_enabled"`
 }

@@ -18,6 +18,7 @@ import (
 )
 
 // TODO: Input sanitazation
+// Roles (Especially on the List handlers
 // TODO: Cross Site request forgery (?)
 
 var (
@@ -248,11 +249,12 @@ func handleCreateUser(query dbQuerier) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Parse the email and password from the request body
 		defer r.Body.Close()
+		defer res.respond(w)
 
 		newUserData, err := decode[userRequestData](r.Body)
 		if err != nil {
 			log.Printf("error decoding json: %v", err)
-			w.WriteHeader(http.StatusBadRequest)
+			res.Status = http.StatusBadRequest
 			return
 		}
 
@@ -260,9 +262,6 @@ func handleCreateUser(query dbQuerier) http.Handler {
 		if ok := validEmail(newUserData.Email); !ok {
 			res.Status = http.StatusBadRequest
 			res.Error = "invalid email"
-			if err := encode(w, res.Status, res); err != nil {
-				log.Printf("could not encode response: %v", err)
-			}
 			return
 		}
 
@@ -272,11 +271,6 @@ func handleCreateUser(query dbQuerier) http.Handler {
 			// If any error other than ErrNoRows is returned this means something unexpected happened.
 			res.Status = http.StatusInternalServerError
 			res.Error = http.StatusText(http.StatusInternalServerError)
-
-			if err := encode(w, res.Status, res); err != nil {
-				log.Printf("could not encode response: %v", err)
-			}
-
 			return
 		}
 
@@ -284,21 +278,13 @@ func handleCreateUser(query dbQuerier) http.Handler {
 		if existingUser.Email != "" {
 			res.Status = http.StatusConflict
 			res.Error = "email is already registered"
-
-			if err := encode(w, res.Status, res); err != nil {
-				log.Printf("could not encode response: %v", err)
-			}
-
 			return
 		}
 
 		// Validate the password criteria
 		if err := passwordvalidator.Validate(newUserData.Password, minEntropy); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			_, err := w.Write(fmt.Appendf([]byte{}, "invalid password: %v", err))
-			if err != nil {
-				log.Printf("error writing response: %v", err)
-			}
+			res.Status = http.StatusBadRequest
+			res.Error = fmt.Sprintf("invalid password: %v", err)
 			return
 		}
 
@@ -306,7 +292,7 @@ func handleCreateUser(query dbQuerier) http.Handler {
 		hash, err := auth.CreateHash(newUserData.Password)
 		if err != nil {
 			log.Printf("error hashing password: %v", err)
-			w.WriteHeader(http.StatusInternalServerError)
+			res.Status = http.StatusInternalServerError
 			return
 		}
 
@@ -317,85 +303,88 @@ func handleCreateUser(query dbQuerier) http.Handler {
 		}
 
 		dbResponse, err := query.CreateUser(r.Context(), createUserParams)
-		statusCode := http.StatusCreated
 		if err != nil {
 			log.Printf("error creating user: %v", err)
-			w.WriteHeader(http.StatusInternalServerError)
+			res.Status = http.StatusInternalServerError
 			return
 		}
 
-		if err := encode(w, statusCode, dbResponse); err != nil {
-			log.Printf("error encoding response: %v", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
+		res.Status = http.StatusCreated
+		res.Content = dbResponse
 	})
 }
 
 func handleListUsers(query *database.Queries) http.Handler {
+	var res response
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
+		defer res.respond(w)
+
 		users, err := query.ListUsers(r.Context())
 		if err != nil {
 			log.Printf("error listing users: %v", err)
-			w.WriteHeader(http.StatusInternalServerError)
+			res.Status = http.StatusInternalServerError
+			res.Error = http.StatusText(http.StatusInternalServerError)
 			return
 		}
-
-		if err := encode(w, http.StatusOK, users); err != nil {
-			log.Printf("error encoding response: %v", err)
-			return
-		}
+		
+		res.Status = http.StatusOK
+		res.Content = users
 	})
 }
 
 func handleGetUser(query dbQuerier) http.Handler {
+	var res response
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		defer res.respond(w)
 		// Parse id from URL path
-		log.Println(r.PathValue("id"))
-		log.Println(r.URL.String())
 		id, err := uuid.Parse(r.PathValue("id"))
 		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte("invalid id"))
+			res.Status = http.StatusBadRequest
+			res.Error = "invalid id"
 			return
 		}
 
 		user, err := query.GetUserById(r.Context(), id)
-
 		if err != nil {
 			if err == sql.ErrNoRows {
-				w.WriteHeader(http.StatusNotFound)
+				res.Status = http.StatusNotFound
+				res.Error = http.StatusText(http.StatusNotFound)
 				return
 			}
 			w.WriteHeader(http.StatusInternalServerError)
+			res.Status = http.StatusInternalServerError
 			return
 		}
 
 		// Sanitize output
 		user.HashedPassword = ""
-
-		if err := encode(w, http.StatusOK, user); err != nil {
-			log.Printf("error encoding response: %v", err)
-			return
-		}
+		
+		res.Status = http.StatusOK
+		res.Content = user
 	})
 }
 
 func handleUpdateUser(query *database.Queries) http.Handler {
+	var res response
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		defer res.respond(w)
+
 		// Parse id from URL query
 		id, err := uuid.Parse(r.PathValue("id"))
 		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte("invalid id"))
+			res.Status = http.StatusBadRequest
+			res.Error = "invalid id"
+			return
 		}
 
 		log.Printf("user id %s update", id.String())
 
 		newUserData, err := decode[userRequestData](r.Body)
 		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
+			res.Status = http.StatusBadRequest
 			return
 		}
 
@@ -403,28 +392,28 @@ func handleUpdateUser(query *database.Queries) http.Handler {
 
 		if _, err := query.GetUserById(r.Context(), id); err != nil {
 			if err == sql.ErrNoRows {
-				w.WriteHeader(http.StatusNotFound)
-				w.Write([]byte("user not found"))
+				res.Status = http.StatusBadRequest
+				res.Error = "user not found"
 				return
 			}
-			w.WriteHeader(http.StatusInternalServerError)
+			res.Status = http.StatusInternalServerError
+			res.Error = http.StatusText(http.StatusInternalServerError)
 			return
 		}
 
 		// Validate the password criteria
 		if err := passwordvalidator.Validate(newUserData.Password, minEntropy); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
-			_, err := w.Write([]byte(fmt.Sprintf("invalid password: %v", err)))
-			if err != nil {
-				log.Printf("error writing response: %v", err)
-			}
+			res.Status = http.StatusBadRequest
+			res.Error = fmt.Sprintf("invalid password: %v", err)
 			return
 		}
 
 		// Hash password
 		hashedPw, err := auth.CreateHash(newUserData.Password)
 		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
+			res.Status = http.StatusInternalServerError
+			res.Error = http.StatusText(http.StatusInternalServerError)
 			return
 		}
 
@@ -439,14 +428,12 @@ func handleUpdateUser(query *database.Queries) http.Handler {
 
 		updatedUser, err := query.UpdateUser(r.Context(), params)
 		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
+			res.Status = http.StatusInternalServerError
+			res.Error = http.StatusText(http.StatusInternalServerError)
 			return
 		}
-
-		if err := encode(w, http.StatusOK, updatedUser); err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
+		res.Status = http.StatusOK
+		res.Content = updatedUser
 	})
 }
 
@@ -454,6 +441,7 @@ func handleDeleteUser(query dbQuerier) http.Handler {
 	var res response
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
 		defer res.respond(w)
 		// Parse id from URL query
 		id, err := uuid.Parse(r.PathValue("id"))
@@ -480,6 +468,7 @@ func handleDeleteUser(query dbQuerier) http.Handler {
 func handleListCards(query *database.Queries) http.Handler {
 	var res response
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
 		defer res.respond(w)
 
 		userId, ok := r.Context().Value(userIdCtxKey).(uuid.UUID)
@@ -496,17 +485,15 @@ func handleListCards(query *database.Queries) http.Handler {
 			res.Status = http.StatusInternalServerError
 			return
 		}
-
-		if err := encode(w, http.StatusOK, dbCards); err != nil {
-			log.Printf("error encoding response: %v", err)
-			return
-		}
+		res.Content = dbCards
+		res.Status = http.StatusOK
 	})
 }
 
 func handleDeleteCard(query dbQuerier) http.Handler {
 	var res response
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
 		defer res.respond(w)
 
 		userId, ok := r.Context().Value(userIdCtxKey).(uuid.UUID)
@@ -556,6 +543,7 @@ func handleCreateCard(db dbQuerier) http.Handler {
 	var res response
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
 		defer res.respond(w)
 
 		userId, ok := r.Context().Value(userIdCtxKey).(uuid.UUID)
@@ -565,7 +553,7 @@ func handleCreateCard(db dbQuerier) http.Handler {
 			return
 		}
 
-		newCard, err := decode[cardRequests](r.Body)
+		newCard, err := decode[cardRequest](r.Body)
 		if err != nil {
 			res.Error = http.StatusText(http.StatusBadRequest)
 			res.Status = http.StatusBadRequest
@@ -597,17 +585,17 @@ func handleCreateCard(db dbQuerier) http.Handler {
 			return
 		}
 
-		if err := encode(w, http.StatusCreated, card); err != nil {
-			log.Printf("error encoding response: %v", err)
-			return
-		}
+		res.Status = http.StatusCreated
+		res.Content = card
 	})
 }
 
 func handleGetCard(query dbQuerier) http.Handler {
 	var res response
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
 		defer res.respond(w)
+
 		userId, ok := r.Context().Value(userIdCtxKey).(uuid.UUID)
 		if !ok {
 			res.Error = http.StatusText(http.StatusForbidden)
@@ -638,10 +626,8 @@ func handleGetCard(query dbQuerier) http.Handler {
 			return
 		}
 
-		if err := encode(w, http.StatusOK, card); err != nil {
-			log.Printf("error encoding response: %v", err)
-			return
-		}
+		res.Content = card
+		res.Status = http.StatusOK
 	})
 }
 
@@ -649,6 +635,7 @@ func handleUpdateCard(db dbQuerier) http.Handler {
 	var res response
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
 		defer res.respond(w)
 
 		userId, ok := r.Context().Value(userIdCtxKey).(uuid.UUID)
@@ -683,7 +670,7 @@ func handleUpdateCard(db dbQuerier) http.Handler {
 			return
 		}
 
-		requestBody, err := decode[cardRequests](r.Body)
+		requestBody, err := decode[cardRequest](r.Body)
 		if err != nil {
 			res.Error = http.StatusText(http.StatusBadRequest)
 			res.Status = http.StatusBadRequest
@@ -701,10 +688,8 @@ func handleUpdateCard(db dbQuerier) http.Handler {
 			return
 		}
 
-		if err := encode(w, http.StatusOK, card); err != nil {
-			log.Printf("error encoding response: %v", err)
-			return
-		}
+		res.Content = card
+		res.Status = http.StatusOK
 	})
 }
 
@@ -724,6 +709,7 @@ func handleCreateCategory(db dbQuerier) http.Handler {
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Parse the category Name and description from the request
+		defer r.Body.Close()
 		defer res.respond(w)
 
 		requestBody, err := decode[categoryRequestBody](r.Body)
@@ -854,6 +840,7 @@ func handleUpdateCategory(db dbQuerier) http.Handler {
 func handleListCategory(db dbQuerier) http.Handler {
 	var res response
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
 		defer res.respond(w)
 
 		// TODO: In future we can do role filtering
@@ -886,6 +873,7 @@ func handleListCategory(db dbQuerier) http.Handler {
 func handleGetCategory(db dbQuerier) http.Handler {
 	var res response
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
 		defer res.respond(w)
 
 		// Retrieve the currently authenticated user from context
@@ -933,6 +921,8 @@ func handleDeleteCategory(db dbQuerier) http.Handler {
 	var res response
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		defer res.respond(w)
 		// Retrieve the currently authenticated user from context
 		val := r.Context().Value(userIdCtxKey)
 		if val == nil {
@@ -978,7 +968,6 @@ func handleDeleteCategory(db dbQuerier) http.Handler {
 				res.Error = http.StatusText(http.StatusInternalServerError)
 				res.Status = http.StatusInternalServerError
 			}
-			encode(w, res.Status, res)
 			return
 		}
 
@@ -993,6 +982,7 @@ func handleCreateSubscription(db dbQuerier) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Parse the email and password from the request body
 		defer r.Body.Close()
+		defer res.respond(w)
 
 		// Retrieve userId from Context (set by middleware)
 		val := r.Context().Value(userIdCtxKey)
@@ -1052,18 +1042,14 @@ func handleCreateSubscription(db dbQuerier) http.Handler {
 		}
 
 		dbResponse, err := db.CreateSubscription(r.Context(), createSubscriptionParams)
-		statusCode := http.StatusCreated
 		if err != nil {
 			log.Printf("error creating user: %v", err)
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 
-		if err := encode(w, statusCode, dbResponse); err != nil {
-			log.Printf("error encoding response: %v", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
+		res.Content = dbResponse
+		res.Status = http.StatusCreated
 	})
 }
 
@@ -1189,16 +1175,17 @@ func handleListSubscription(db dbQuerier) http.Handler {
 		}
 		userId := val.(uuid.UUID)
 
-		categories, err := db.ListSubscriptionsForUserId(r.Context(), userId)
+		subscriptions, err := db.ListSubscriptionsForUserId(r.Context(), userId)
 		if err != nil {
 			log.Printf("%v: %v", UnexpectedDbError, &err)
 			res.Status = http.StatusInternalServerError
 			res.Error = http.StatusText(http.StatusInternalServerError)
 			return
 		}
+		log.Println(subscriptions)
 
 		res.Status = http.StatusOK
-		res.Content = categories
+		res.Content = subscriptions
 	})
 }
 
@@ -1275,5 +1262,138 @@ func handleUpdateSubscription(db dbQuerier) http.Handler {
 }
 
 // --- Active subscription handlers
+func handleListActiveSubscription(db dbQuerier) http.Handler {
+	var res response
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer res.respond(w)
+
+		// Retrieve userId from Context (set by middleware)
+		val := r.Context().Value(userIdCtxKey)
+		if val == nil {
+			log.Println("could not retrieve userId from context")
+			res.Status = http.StatusBadRequest
+			res.Error = http.StatusText(http.StatusBadRequest)
+			return
+		}
+		userId := val.(uuid.UUID)
+
+		active_subscriptions, err := db.ListActiveSubscriptionByUserId(r.Context(), userId)
+		if err != nil {
+			log.Printf("%v: %v", UnexpectedDbError, &err)
+			res.Status = http.StatusInternalServerError
+			res.Error = http.StatusText(http.StatusInternalServerError)
+			return
+		}
+
+		res.Status = http.StatusOK
+		res.Content = active_subscriptions
+	})
+}
+
+func handleGetActiveSubscription(db dbQuerier) http.Handler {
+	var res response
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer res.respond(w)
+		userId, ok := r.Context().Value(userIdCtxKey).(uuid.UUID)
+		if !ok {
+			res.Error = http.StatusText(http.StatusForbidden)
+			res.Status = http.StatusForbidden
+			return
+		}
+
+		id, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			res.Error = "invalid id"
+			res.Status = http.StatusBadRequest
+		}
+
+		active_subscription, err := db.GetActiveSubscriptionById(r.Context(), id)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				res.Error = http.StatusText(http.StatusNotFound)
+				res.Status = http.StatusNotFound
+				return
+			}
+			res.Error = http.StatusText(http.StatusInternalServerError)
+			res.Status = http.StatusInternalServerError
+			return
+		}
+		if active_subscription.UserID != userId {
+			res.Error = http.StatusText(http.StatusForbidden)
+			res.Status = http.StatusForbidden
+			return
+		}
+
+		res.Content = active_subscription
+		res.Status = http.StatusOK
+	})
+}
+
+func handleUpdateActiveSubscription(db dbQuerier) http.Handler {
+	var res response
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		defer res.respond(w)
+
+		userId, ok := r.Context().Value(userIdCtxKey).(uuid.UUID)
+		if !ok {
+			res.Error = http.StatusText(http.StatusForbidden)
+			res.Status = http.StatusForbidden
+			return
+		}
+
+		id, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			res.Error = "invalid id"
+			res.Status = http.StatusBadRequest
+			return
+		}
+
+		existingActiveSub, err := db.GetActiveSubscriptionById(r.Context(), id)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				res.Error = http.StatusText(http.StatusNotFound)
+				res.Status = http.StatusNotFound
+				return
+			}
+			log.Printf("error getting existing card: %v", err)
+			res.Error = http.StatusText(http.StatusInternalServerError)
+			res.Status = http.StatusInternalServerError
+			return
+		}
+		if existingActiveSub.UserID != userId {
+			res.Error = http.StatusText(http.StatusForbidden)
+			res.Status = http.StatusForbidden
+			return
+		}
+
+		requestBody, err := decode[activeSubscriptionUpdateRequest](r.Body)
+		if err != nil {
+			log.Println("Bad request body: ", err)
+			res.Error = http.StatusText(http.StatusBadRequest)
+			res.Status = http.StatusBadRequest
+			return
+		}
+
+		activeSub, err := db.UpdateActiveSubscription(r.Context(), database.UpdateActiveSubscriptionParams{
+			ID: id,
+			BillingFrequency: requestBody.BillingFrequency,
+			AutoRenewEnabled: sql.NullBool{
+				Bool: *requestBody.AutoRenewEnabled,
+				Valid: true,
+			},
+		})
+		if err != nil {
+			log.Printf("error updating active subscription: %v", err)
+			res.Error = http.StatusText(http.StatusInternalServerError)
+			res.Status = http.StatusInternalServerError
+			return
+		}
+
+		res.Content = activeSub
+		res.Status = http.StatusOK
+	})
+}
 
 // --- Active trails handlers

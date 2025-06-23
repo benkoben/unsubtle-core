@@ -55,4 +55,7 @@ type dbQuerier interface {
 	// ActiveTrails interactions
 
 	// ActiveSubscriptions interactions
+	ListActiveSubscriptionByUserId(ctx context.Context, userID uuid.UUID) ([]database.ActiveSubscription, error)
+	GetActiveSubscriptionById(ctx context.Context, id uuid.UUID) (database.ActiveSubscription, error)
+	UpdateActiveSubscription(ctx context.Context, arg database.UpdateActiveSubscriptionParams) (database.ActiveSubscription, error)
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log"
 	"net/http"
 
 	"github.com/benkoben/unsubtle-core/internal/auth"
@@ -19,12 +20,12 @@ func WithUserId(ctx context.Context, userId uuid.UUID) context.Context {
 }
 
 func GetUserId(ctx context.Context) *uuid.UUID {
-  userId, ok := ctx.Value(userIdCtxKey).(*uuid.UUID)
-  if !ok {
-    // Log this issue
-    return nil
-  }
-  return userId
+	userId, ok := ctx.Value(userIdCtxKey).(*uuid.UUID)
+	if !ok {
+		// Log this issue
+		return nil
+	}
+	return userId
 }
 
 func authenticate(next http.Handler, jwtSecret string) http.Handler {
@@ -33,6 +34,7 @@ func authenticate(next http.Handler, jwtSecret string) http.Handler {
 		// Get the bearer token from request header
 		token, err := auth.GetBearerToken(r.Header)
 		if err != nil {
+			log.Println(err)
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}
@@ -43,7 +45,7 @@ func authenticate(next http.Handler, jwtSecret string) http.Handler {
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}
-				
+
 		next.ServeHTTP(w, r.WithContext(WithUserId(r.Context(), userId)))
 	})
 }

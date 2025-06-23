@@ -1,13 +1,14 @@
 package auth
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
+	"math/rand"
+	"net/http"
+	"strings"
 	"time"
-    "net/http"
-    "strings"
-    "math/rand"
-    "encoding/hex"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
@@ -73,9 +74,10 @@ func GetBearerToken(headers http.Header)(string, error){
     }
 
     bearer := strings.Fields(headerVal)
-    if bearer[0] != "Bearer" {
+	log.Println(bearer)
+	if len(bearer) < 2 || bearer[0] != "Bearer" {
         return "", errors.New("invalid bearer token format")
-    }
+	}
 
     return bearer[1], nil
 }
