@@ -39,3 +39,10 @@ type activeSubscriptionUpdateRequest struct {
 	BillingFrequency string `json:"billing_frequency"`
 	AutoRenewEnabled *bool  `json:"auto_renew_enabled"`
 }
+
+type activeSubscriptionRequest struct {
+	SubscriptionID   uuid.UUID    `json:"subscription_id"`
+	CardID           uuid.UUID    `json:"card_id"`
+	BillingFrequency string       `json:"billing_frequency"`
+	AutoRenewEnabled sql.NullBool `json:"auto_renew_enabled"`
+}

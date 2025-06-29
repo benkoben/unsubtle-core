@@ -36,9 +36,18 @@ SELECT *
 FROM active_subscriptions
 WHERE user_id = $1;
 
+-- name: GetActiveSubscriptionByUserIdAndSubId :one
+SELECT *
+FROM active_subscriptions
+WHERE user_id = $1 AND subscription_id = $2;
+
 -- name: GetActiveSubscriptionById :one
 SELECT *
 FROM active_subscriptions
+WHERE id = $1;
+
+-- name: DeleteActiveSubscription :execresult
+DELETE FROM active_subscriptions
 WHERE id = $1;
 
 -- name: UpdateActiveSubscription :one

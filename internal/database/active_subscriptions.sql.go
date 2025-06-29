@@ -59,6 +59,15 @@ func (q *Queries) CreateActiveSubscription(ctx context.Context, arg CreateActive
 	return i, err
 }
 
+const deleteActiveSubscription = `-- name: DeleteActiveSubscription :execresult
+DELETE FROM active_subscriptions
+WHERE id = $1
+`
+
+func (q *Queries) DeleteActiveSubscription(ctx context.Context, id uuid.UUID) (sql.Result, error) {
+	return q.db.ExecContext(ctx, deleteActiveSubscription, id)
+}
+
 const disableAutoRenew = `-- name: DisableAutoRenew :exec
 UPDATE active_subscriptions
 SET auto_renew_enabled = false
@@ -89,6 +98,33 @@ WHERE id = $1
 
 func (q *Queries) GetActiveSubscriptionById(ctx context.Context, id uuid.UUID) (ActiveSubscription, error) {
 	row := q.db.QueryRowContext(ctx, getActiveSubscriptionById, id)
+	var i ActiveSubscription
+	err := row.Scan(
+		&i.ID,
+		&i.SubscriptionID,
+		&i.UserID,
+		&i.CardID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.BillingFrequency,
+		&i.AutoRenewEnabled,
+	)
+	return i, err
+}
+
+const getActiveSubscriptionByUserIdAndSubId = `-- name: GetActiveSubscriptionByUserIdAndSubId :one
+SELECT id, subscription_id, user_id, card_id, created_at, updated_at, billing_frequency, auto_renew_enabled
+FROM active_subscriptions
+WHERE user_id = $1 AND subscription_id = $2
+`
+
+type GetActiveSubscriptionByUserIdAndSubIdParams struct {
+	UserID         uuid.UUID `json:"user_id"`
+	SubscriptionID uuid.UUID `json:"subscription_id"`
+}
+
+func (q *Queries) GetActiveSubscriptionByUserIdAndSubId(ctx context.Context, arg GetActiveSubscriptionByUserIdAndSubIdParams) (ActiveSubscription, error) {
+	row := q.db.QueryRowContext(ctx, getActiveSubscriptionByUserIdAndSubId, arg.UserID, arg.SubscriptionID)
 	var i ActiveSubscription
 	err := row.Scan(
 		&i.ID,

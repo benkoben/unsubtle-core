@@ -58,4 +58,7 @@ type dbQuerier interface {
 	ListActiveSubscriptionByUserId(ctx context.Context, userID uuid.UUID) ([]database.ActiveSubscription, error)
 	GetActiveSubscriptionById(ctx context.Context, id uuid.UUID) (database.ActiveSubscription, error)
 	UpdateActiveSubscription(ctx context.Context, arg database.UpdateActiveSubscriptionParams) (database.ActiveSubscription, error)
+	DeleteActiveSubscription(ctx context.Context, id uuid.UUID) (sql.Result, error)
+	CreateActiveSubscription(ctx context.Context, arg database.CreateActiveSubscriptionParams) (database.ActiveSubscription, error)
+	GetActiveSubscriptionByUserIdAndSubId(ctx context.Context, arg database.GetActiveSubscriptionByUserIdAndSubIdParams) (database.ActiveSubscription, error)
 }

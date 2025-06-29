@@ -460,7 +460,7 @@ func handleDeleteUser(query dbQuerier) http.Handler {
 			}
 			return
 		}
-		res.Status = http.StatusOK
+		res.Status = http.StatusNoContent
 	})
 }
 
@@ -1393,6 +1393,83 @@ func handleUpdateActiveSubscription(db dbQuerier) http.Handler {
 
 		res.Content = activeSub
 		res.Status = http.StatusOK
+	})
+}
+
+func handleDeleteActiveSubscription(query dbQuerier) http.Handler {
+	var res response
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		defer res.respond(w)
+		// Parse id from URL query
+		id, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte("invalid id"))
+		}
+
+		if _, err := query.DeleteActiveSubscription(r.Context(), id); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				res.Error = "user not found"
+				res.Status = http.StatusNotFound
+			} else {
+				res.Error = http.StatusText(http.StatusInternalServerError)
+				res.Status = http.StatusInternalServerError
+			}
+			return
+		}
+		res.Status = http.StatusNoContent
+	})
+}
+
+func handleCreateActiveSubscription(db dbQuerier) http.Handler {
+	var res response
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		defer res.respond(w)
+
+		userId, ok := r.Context().Value(userIdCtxKey).(uuid.UUID)
+		if !ok {
+			res.Error = http.StatusText(http.StatusForbidden)
+			res.Status = http.StatusForbidden
+			return
+		}
+
+		newActiveSubscription, err := decode[activeSubscriptionRequest](r.Body)
+		if err != nil {
+			res.Error = http.StatusText(http.StatusBadRequest)
+			res.Status = http.StatusBadRequest
+			return
+		}
+
+		if _, err := db.GetActiveSubscriptionByUserIdAndSubId(r.Context(), database.GetActiveSubscriptionByUserIdAndSubIdParams{UserID: userId, SubscriptionID: newActiveSubscription.SubscriptionID}); err != nil {
+			if !errors.Is(err, sql.ErrNoRows) {
+				log.Printf("error getting existing card: %v", err)
+				res.Error = http.StatusText(http.StatusInternalServerError)
+				res.Status = http.StatusInternalServerError
+				return
+			}
+		}
+		
+		activeSubscription, err := db.CreateActiveSubscription(r.Context(), database.CreateActiveSubscriptionParams{
+			SubscriptionID: newActiveSubscription.SubscriptionID,
+			UserID: userId,
+			CardID: newActiveSubscription.CardID,
+			UpdatedAt: time.Now(),
+			BillingFrequency: newActiveSubscription.BillingFrequency,
+			AutoRenewEnabled: newActiveSubscription.AutoRenewEnabled,
+		})
+
+		if err != nil {
+			res.Error = http.StatusText(http.StatusInternalServerError)
+			res.Status = http.StatusInternalServerError
+			return
+		}
+
+		res.Status = http.StatusCreated
+		res.Content = activeSubscription
 	})
 }
 
