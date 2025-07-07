@@ -3,8 +3,8 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
-    "io"
 	"net/mail"
 )
 
@@ -28,4 +28,8 @@ func decode[T any](r io.Reader) (T, error) {
 		return v, fmt.Errorf("decoding JSON: %w", err)
 	}
 	return v, nil
+}
+
+func toPtr[T any](v T) *T {
+	return &v
 }

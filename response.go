@@ -6,9 +6,9 @@ import (
 )
 
 type response struct {
-	Content any `json:"content,omitempty"`
-	Status  int    `json:"status"`
-	Error   string `json:"error,omitempty"`
+	Content any     `json:"content,omitempty"`
+	Status  int     `json:"status"`
+	Error   *string `json:"error,omitempty"`
 }
 
 func (res *response) respond(w http.ResponseWriter) error {

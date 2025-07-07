@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -154,7 +156,7 @@ func handleLogin(db dbQuerier, cfg *Config) http.Handler {
 			if err == sql.ErrNoRows {
 				// User does not exist in database
 				res.Status = http.StatusForbidden
-				res.Error = http.StatusText(http.StatusForbidden)
+				res.Error = toPtr(http.StatusText(http.StatusForbidden))
 				if err := encode(w, res.Status, res); err != nil {
 					log.Printf("could not encode response: %v", err)
 				}
@@ -171,7 +173,7 @@ func handleLogin(db dbQuerier, cfg *Config) http.Handler {
 		// Validate password
 		if ok := auth.IsValid(loginCredentials.Password, registeredUser.HashedPassword); !ok {
 			res.Status = http.StatusForbidden
-			res.Error = "invalid password"
+			res.Error = toPtr("invalid password")
 			if err := encode(w, res.Status, res); err != nil {
 				log.Printf("could not encode response: %v", err)
 			}
@@ -261,7 +263,7 @@ func handleCreateUser(query dbQuerier) http.Handler {
 		// Validate the email
 		if ok := validEmail(newUserData.Email); !ok {
 			res.Status = http.StatusBadRequest
-			res.Error = "invalid email"
+			res.Error = toPtr("invalid email")
 			return
 		}
 
@@ -270,21 +272,21 @@ func handleCreateUser(query dbQuerier) http.Handler {
 		if err != nil && err != sql.ErrNoRows {
 			// If any error other than ErrNoRows is returned this means something unexpected happened.
 			res.Status = http.StatusInternalServerError
-			res.Error = http.StatusText(http.StatusInternalServerError)
+			res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
 			return
 		}
 
 		// If existingUser contains data, this means there already exists a database entry for the requested email
 		if existingUser.Email != "" {
 			res.Status = http.StatusConflict
-			res.Error = "email is already registered"
+			res.Error = toPtr("email is already registered")
 			return
 		}
 
 		// Validate the password criteria
 		if err := passwordvalidator.Validate(newUserData.Password, minEntropy); err != nil {
 			res.Status = http.StatusBadRequest
-			res.Error = fmt.Sprintf("invalid password: %v", err)
+			res.Error = toPtr(fmt.Sprintf("invalid password: %v", err))
 			return
 		}
 
@@ -324,10 +326,10 @@ func handleListUsers(query *database.Queries) http.Handler {
 		if err != nil {
 			log.Printf("error listing users: %v", err)
 			res.Status = http.StatusInternalServerError
-			res.Error = http.StatusText(http.StatusInternalServerError)
+			res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
 			return
 		}
-		
+
 		res.Status = http.StatusOK
 		res.Content = users
 	})
@@ -342,7 +344,7 @@ func handleGetUser(query dbQuerier) http.Handler {
 		id, err := uuid.Parse(r.PathValue("id"))
 		if err != nil {
 			res.Status = http.StatusBadRequest
-			res.Error = "invalid id"
+			res.Error = toPtr("invalid id")
 			return
 		}
 
@@ -350,7 +352,7 @@ func handleGetUser(query dbQuerier) http.Handler {
 		if err != nil {
 			if err == sql.ErrNoRows {
 				res.Status = http.StatusNotFound
-				res.Error = http.StatusText(http.StatusNotFound)
+				res.Error = toPtr(http.StatusText(http.StatusNotFound))
 				return
 			}
 			w.WriteHeader(http.StatusInternalServerError)
@@ -360,7 +362,7 @@ func handleGetUser(query dbQuerier) http.Handler {
 
 		// Sanitize output
 		user.HashedPassword = ""
-		
+
 		res.Status = http.StatusOK
 		res.Content = user
 	})
@@ -376,7 +378,7 @@ func handleUpdateUser(query *database.Queries) http.Handler {
 		id, err := uuid.Parse(r.PathValue("id"))
 		if err != nil {
 			res.Status = http.StatusBadRequest
-			res.Error = "invalid id"
+			res.Error = toPtr("invalid id")
 			return
 		}
 
@@ -393,11 +395,11 @@ func handleUpdateUser(query *database.Queries) http.Handler {
 		if _, err := query.GetUserById(r.Context(), id); err != nil {
 			if err == sql.ErrNoRows {
 				res.Status = http.StatusBadRequest
-				res.Error = "user not found"
+				res.Error = toPtr( "user not found")
 				return
 			}
 			res.Status = http.StatusInternalServerError
-			res.Error = http.StatusText(http.StatusInternalServerError)
+			res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
 			return
 		}
 
@@ -405,7 +407,7 @@ func handleUpdateUser(query *database.Queries) http.Handler {
 		if err := passwordvalidator.Validate(newUserData.Password, minEntropy); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			res.Status = http.StatusBadRequest
-			res.Error = fmt.Sprintf("invalid password: %v", err)
+			res.Error = toPtr(fmt.Sprintf("invalid password: %v", err))
 			return
 		}
 
@@ -413,7 +415,7 @@ func handleUpdateUser(query *database.Queries) http.Handler {
 		hashedPw, err := auth.CreateHash(newUserData.Password)
 		if err != nil {
 			res.Status = http.StatusInternalServerError
-			res.Error = http.StatusText(http.StatusInternalServerError)
+			res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
 			return
 		}
 
@@ -429,7 +431,7 @@ func handleUpdateUser(query *database.Queries) http.Handler {
 		updatedUser, err := query.UpdateUser(r.Context(), params)
 		if err != nil {
 			res.Status = http.StatusInternalServerError
-			res.Error = http.StatusText(http.StatusInternalServerError)
+			res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
 			return
 		}
 		res.Status = http.StatusOK
@@ -452,10 +454,10 @@ func handleDeleteUser(query dbQuerier) http.Handler {
 
 		if _, err := query.DeleteUser(r.Context(), id); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				res.Error = "user not found"
+				res.Error = toPtr( "user not found")
 				res.Status = http.StatusNotFound
 			} else {
-				res.Error = http.StatusText(http.StatusInternalServerError)
+				res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
 				res.Status = http.StatusInternalServerError
 			}
 			return
@@ -473,7 +475,7 @@ func handleListCards(query *database.Queries) http.Handler {
 
 		userId, ok := r.Context().Value(userIdCtxKey).(uuid.UUID)
 		if !ok {
-			res.Error = http.StatusText(http.StatusForbidden)
+			res.Error = toPtr(http.StatusText(http.StatusForbidden))
 			res.Status = http.StatusForbidden
 			return
 		}
@@ -481,7 +483,7 @@ func handleListCards(query *database.Queries) http.Handler {
 		// TODO: Authorization should be added to differentiate between all and user specific database entries.
 		dbCards, err := query.ListCardsForOwner(r.Context(), userId)
 		if err != nil {
-			res.Error = http.StatusText(http.StatusInternalServerError)
+			res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
 			res.Status = http.StatusInternalServerError
 			return
 		}
@@ -498,40 +500,40 @@ func handleDeleteCard(query dbQuerier) http.Handler {
 
 		userId, ok := r.Context().Value(userIdCtxKey).(uuid.UUID)
 		if !ok {
-			res.Error = http.StatusText(http.StatusForbidden)
+			res.Error = toPtr(http.StatusText(http.StatusForbidden))
 			res.Status = http.StatusForbidden
 			return
 		}
 
 		id, err := uuid.Parse(r.PathValue("id"))
 		if err != nil {
-			res.Error = "invalid id"
+			res.Error = toPtr("invalid id")
 			res.Status = http.StatusBadRequest
 		}
 
 		card, err := query.GetCard(r.Context(), id)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				res.Error = http.StatusText(http.StatusNotFound)
+				res.Error = toPtr(http.StatusText(http.StatusNotFound))
 				res.Status = http.StatusNotFound
 				return
 			}
-			res.Error = http.StatusText(http.StatusInternalServerError)
+			res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
 			res.Status = http.StatusInternalServerError
 			return
 		}
 		if card.Owner != userId {
-			res.Error = http.StatusText(http.StatusForbidden)
+			res.Error = toPtr(http.StatusText(http.StatusForbidden))
 			res.Status = http.StatusForbidden
 		}
 
 		if _, err := query.DeleteCard(r.Context(), id); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				res.Error = http.StatusText(http.StatusNotFound)
+				res.Error = toPtr(http.StatusText(http.StatusNotFound))
 				res.Status = http.StatusNotFound
 				return
 			}
-			res.Error = http.StatusText(http.StatusInternalServerError)
+			res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
 			res.Status = http.StatusInternalServerError
 			return
 		}
@@ -548,14 +550,14 @@ func handleCreateCard(db dbQuerier) http.Handler {
 
 		userId, ok := r.Context().Value(userIdCtxKey).(uuid.UUID)
 		if !ok {
-			res.Error = http.StatusText(http.StatusForbidden)
+			res.Error = toPtr(http.StatusText(http.StatusForbidden))
 			res.Status = http.StatusForbidden
 			return
 		}
 
 		newCard, err := decode[cardRequest](r.Body)
 		if err != nil {
-			res.Error = http.StatusText(http.StatusBadRequest)
+			res.Error = toPtr(http.StatusText(http.StatusBadRequest))
 			res.Status = http.StatusBadRequest
 			return
 		}
@@ -567,7 +569,7 @@ func handleCreateCard(db dbQuerier) http.Handler {
 			// If the card does not exist, this is a good thing. Otherwise something unexpected happened
 			if !errors.Is(err, sql.ErrNoRows) {
 				log.Printf("error getting existing card: %v", err)
-				res.Error = http.StatusText(http.StatusInternalServerError)
+				res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
 				res.Status = http.StatusInternalServerError
 				return
 			}
@@ -580,7 +582,7 @@ func handleCreateCard(db dbQuerier) http.Handler {
 		})
 
 		if err != nil {
-			res.Error = http.StatusText(http.StatusInternalServerError)
+			res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
 			res.Status = http.StatusInternalServerError
 			return
 		}
@@ -598,30 +600,30 @@ func handleGetCard(query dbQuerier) http.Handler {
 
 		userId, ok := r.Context().Value(userIdCtxKey).(uuid.UUID)
 		if !ok {
-			res.Error = http.StatusText(http.StatusForbidden)
+			res.Error = toPtr(http.StatusText(http.StatusForbidden))
 			res.Status = http.StatusForbidden
 			return
 		}
 
 		id, err := uuid.Parse(r.PathValue("id"))
 		if err != nil {
-			res.Error = "invalid id"
+			res.Error = toPtr("invalid id")
 			res.Status = http.StatusBadRequest
 		}
 
 		card, err := query.GetCard(r.Context(), id)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				res.Error = http.StatusText(http.StatusNotFound)
+				res.Error = toPtr(http.StatusText(http.StatusNotFound))
 				res.Status = http.StatusNotFound
 				return
 			}
-			res.Error = http.StatusText(http.StatusInternalServerError)
+			res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
 			res.Status = http.StatusInternalServerError
 			return
 		}
 		if card.Owner != userId {
-			res.Error = http.StatusText(http.StatusForbidden)
+			res.Error = toPtr(http.StatusText(http.StatusForbidden))
 			res.Status = http.StatusForbidden
 			return
 		}
@@ -640,14 +642,14 @@ func handleUpdateCard(db dbQuerier) http.Handler {
 
 		userId, ok := r.Context().Value(userIdCtxKey).(uuid.UUID)
 		if !ok {
-			res.Error = http.StatusText(http.StatusForbidden)
+			res.Error = toPtr(http.StatusText(http.StatusForbidden))
 			res.Status = http.StatusForbidden
 			return
 		}
 
 		id, err := uuid.Parse(r.PathValue("id"))
 		if err != nil {
-			res.Error = "invalid id"
+			res.Error = toPtr("invalid id")
 			res.Status = http.StatusBadRequest
 			return
 		}
@@ -655,24 +657,24 @@ func handleUpdateCard(db dbQuerier) http.Handler {
 		existingCard, err := db.GetCard(r.Context(), id)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				res.Error = http.StatusText(http.StatusNotFound)
+				res.Error = toPtr(http.StatusText(http.StatusNotFound))
 				res.Status = http.StatusNotFound
 				return
 			}
 			log.Printf("error getting existing card: %v", err)
-			res.Error = http.StatusText(http.StatusInternalServerError)
+			res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
 			res.Status = http.StatusInternalServerError
 			return
 		}
 		if existingCard.Owner != userId {
-			res.Error = http.StatusText(http.StatusForbidden)
+			res.Error = toPtr(http.StatusText(http.StatusForbidden))
 			res.Status = http.StatusForbidden
 			return
 		}
 
 		requestBody, err := decode[cardRequest](r.Body)
 		if err != nil {
-			res.Error = http.StatusText(http.StatusBadRequest)
+			res.Error = toPtr(http.StatusText(http.StatusBadRequest))
 			res.Status = http.StatusBadRequest
 			return
 		}
@@ -683,7 +685,7 @@ func handleUpdateCard(db dbQuerier) http.Handler {
 		})
 		if err != nil {
 			log.Printf("error updating card: %v", err)
-			res.Error = http.StatusText(http.StatusInternalServerError)
+			res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
 			res.Status = http.StatusInternalServerError
 			return
 		}
@@ -716,7 +718,7 @@ func handleCreateCategory(db dbQuerier) http.Handler {
 		if err != nil {
 			log.Println("could not decode body")
 			res.Status = http.StatusBadRequest
-			res.Error = http.StatusText(http.StatusBadRequest)
+			res.Error = toPtr(http.StatusText(http.StatusBadRequest))
 			return
 		}
 
@@ -725,7 +727,7 @@ func handleCreateCategory(db dbQuerier) http.Handler {
 		if val == nil {
 			log.Println("could not retrieve userId from context")
 			res.Status = http.StatusBadRequest
-			res.Error = http.StatusText(http.StatusBadRequest)
+			res.Error = toPtr(http.StatusText(http.StatusBadRequest))
 			return
 		}
 		userId := val.(uuid.UUID)
@@ -735,7 +737,7 @@ func handleCreateCategory(db dbQuerier) http.Handler {
 			CreatedBy: userId,
 		}); err != nil {
 			if !errors.Is(err, sql.ErrNoRows) {
-				res.Error = http.StatusText(http.StatusInternalServerError)
+				res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
 				res.Status = http.StatusInternalServerError
 				return
 			}
@@ -754,7 +756,7 @@ func handleCreateCategory(db dbQuerier) http.Handler {
 
 		if err != nil {
 			res.Status = http.StatusBadRequest
-			res.Error = http.StatusText(http.StatusBadRequest)
+			res.Error = toPtr(http.StatusText(http.StatusBadRequest))
 			return
 		}
 
@@ -778,7 +780,7 @@ func handleUpdateCategory(db dbQuerier) http.Handler {
 		requestBody, err := decode[categoryUpdateRequestBody](r.Body)
 		if err != nil {
 			res.Status = http.StatusBadRequest
-			res.Error = http.StatusText(http.StatusBadRequest)
+			res.Error = toPtr(http.StatusText(http.StatusBadRequest))
 			if err := encode(w, res.Status, res); err != nil {
 				log.Printf("%w: %w", ResponseFailureError, err)
 			}
@@ -796,11 +798,11 @@ func handleUpdateCategory(db dbQuerier) http.Handler {
 		if err != nil {
 			if err == sql.ErrNoRows {
 				res.Status = http.StatusNotFound
-				res.Error = http.StatusText(http.StatusNotFound)
+				res.Error = toPtr(http.StatusText(http.StatusNotFound))
 			} else {
 				log.Printf("%w: %w", UnexpectedDbError, &err)
 				res.Status = http.StatusInternalServerError
-				res.Error = http.StatusText(http.StatusInternalServerError)
+				res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
 			}
 			return
 		}
@@ -809,13 +811,13 @@ func handleUpdateCategory(db dbQuerier) http.Handler {
 		if !ok {
 			// Check that the userId is not malformed
 			res.Status = http.StatusBadRequest
-			res.Error = http.StatusText(http.StatusBadRequest)
+			res.Error = toPtr(http.StatusText(http.StatusBadRequest))
 			return
 		}
 
 		if authenticatedUserId != existingCategory.CreatedBy {
 			res.Status = http.StatusForbidden
-			res.Error = http.StatusText(http.StatusForbidden)
+			res.Error = toPtr(http.StatusText(http.StatusForbidden))
 			return
 		}
 
@@ -828,7 +830,7 @@ func handleUpdateCategory(db dbQuerier) http.Handler {
 		if err != nil {
 			log.Printf("%w: %w", UnexpectedDbError, &err)
 			res.Status = http.StatusInternalServerError
-			res.Error = http.StatusText(http.StatusInternalServerError)
+			res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
 			return
 		}
 
@@ -852,7 +854,7 @@ func handleListCategory(db dbQuerier) http.Handler {
 		if val == nil {
 			log.Println("could not retrieve userId from context")
 			res.Status = http.StatusBadRequest
-			res.Error = http.StatusText(http.StatusBadRequest)
+			res.Error = toPtr(http.StatusText(http.StatusBadRequest))
 			return
 		}
 		userId := val.(uuid.UUID)
@@ -861,7 +863,7 @@ func handleListCategory(db dbQuerier) http.Handler {
 		if err != nil {
 			log.Printf("%w: %w", UnexpectedDbError, &err)
 			res.Status = http.StatusInternalServerError
-			res.Error = http.StatusText(http.StatusInternalServerError)
+			res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
 			return
 		}
 
@@ -881,7 +883,7 @@ func handleGetCategory(db dbQuerier) http.Handler {
 		if val == nil {
 			log.Println("could not retrieve userId from context")
 			res.Status = http.StatusBadRequest
-			res.Error = http.StatusText(http.StatusBadRequest)
+			res.Error = toPtr(http.StatusText(http.StatusBadRequest))
 			return
 		}
 		userId := val.(uuid.UUID)
@@ -908,7 +910,7 @@ func handleGetCategory(db dbQuerier) http.Handler {
 
 		if category.CreatedBy != userId {
 			res.Status = http.StatusForbidden
-			res.Error = http.StatusText(http.StatusForbidden)
+			res.Error = toPtr(http.StatusText(http.StatusForbidden))
 			return
 		}
 
@@ -928,7 +930,7 @@ func handleDeleteCategory(db dbQuerier) http.Handler {
 		if val == nil {
 			log.Println("could not retrieve userId from context")
 			res.Status = http.StatusBadRequest
-			res.Error = http.StatusText(http.StatusBadRequest)
+			res.Error = toPtr(http.StatusText(http.StatusBadRequest))
 			return
 		}
 		userId := val.(uuid.UUID)
@@ -955,17 +957,17 @@ func handleDeleteCategory(db dbQuerier) http.Handler {
 		// Check if the currently authenticated user is allowed to delete
 		if category.CreatedBy != userId {
 			res.Status = http.StatusForbidden
-			res.Error = http.StatusText(http.StatusForbidden)
+			res.Error = toPtr(http.StatusText(http.StatusForbidden))
 			return
 		}
 
 		// Delete the category
 		if _, err := db.DeleteCategory(r.Context(), id); err != nil {
 			if err == sql.ErrNoRows {
-				res.Error = http.StatusText(http.StatusNotFound)
+				res.Error = toPtr(http.StatusText(http.StatusNotFound))
 				res.Status = http.StatusNotFound
 			} else {
-				res.Error = http.StatusText(http.StatusInternalServerError)
+				res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
 				res.Status = http.StatusInternalServerError
 			}
 			return
@@ -989,7 +991,7 @@ func handleCreateSubscription(db dbQuerier) http.Handler {
 		if val == nil {
 			log.Println("could not retrieve userId from context")
 			res.Status = http.StatusBadRequest
-			res.Error = http.StatusText(http.StatusBadRequest)
+			res.Error = toPtr(http.StatusText(http.StatusBadRequest))
 			return
 		}
 		userId := val.(uuid.UUID)
@@ -1009,7 +1011,7 @@ func handleCreateSubscription(db dbQuerier) http.Handler {
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			// If any error other than ErrNoRows is returned this means something unexpected happened.
 			res.Status = http.StatusInternalServerError
-			res.Error = http.StatusText(http.StatusInternalServerError)
+			res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
 
 			if err := encode(w, res.Status, res); err != nil {
 				log.Printf("could not encode response: %v", err)
@@ -1021,7 +1023,7 @@ func handleCreateSubscription(db dbQuerier) http.Handler {
 		// If existingSubscription contains data, this means there already exists a database entry for the requested email
 		if existingSubscription.Name != "" {
 			res.Status = http.StatusConflict
-			res.Error = "subscription is already registered"
+			res.Error = toPtr("subscription is already registered")
 
 			if err := encode(w, res.Status, res); err != nil {
 				log.Printf("could not encode response: %v", err)
@@ -1062,7 +1064,7 @@ func handleDeleteSubscription(db dbQuerier) http.Handler {
 		if val == nil {
 			log.Println("could not retrieve userId from context")
 			res.Status = http.StatusBadRequest
-			res.Error = http.StatusText(http.StatusBadRequest)
+			res.Error = toPtr(http.StatusText(http.StatusBadRequest))
 			return
 		}
 		userId := val.(uuid.UUID)
@@ -1089,17 +1091,17 @@ func handleDeleteSubscription(db dbQuerier) http.Handler {
 		// Check if the currently authenticated user is allowed to delete
 		if subscription.CreatedBy != userId {
 			res.Status = http.StatusForbidden
-			res.Error = http.StatusText(http.StatusForbidden)
+			res.Error = toPtr(http.StatusText(http.StatusForbidden))
 			return
 		}
 
 		// Delete the category
 		if _, err := db.DeleteSubscription(r.Context(), id); err != nil {
 			if err == sql.ErrNoRows {
-				res.Error = http.StatusText(http.StatusNotFound)
+				res.Error = toPtr(http.StatusText(http.StatusNotFound))
 				res.Status = http.StatusNotFound
 			} else {
-				res.Error = http.StatusText(http.StatusInternalServerError)
+				res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
 				res.Status = http.StatusInternalServerError
 			}
 			encode(w, res.Status, res)
@@ -1120,7 +1122,7 @@ func handleGetSubscription(db dbQuerier) http.Handler {
 		if val == nil {
 			log.Println("could not retrieve userId from context")
 			res.Status = http.StatusBadRequest
-			res.Error = http.StatusText(http.StatusBadRequest)
+			res.Error = toPtr(http.StatusText(http.StatusBadRequest))
 			return
 		}
 		userId := val.(uuid.UUID)
@@ -1147,7 +1149,7 @@ func handleGetSubscription(db dbQuerier) http.Handler {
 
 		if subscription.CreatedBy != userId {
 			res.Status = http.StatusForbidden
-			res.Error = http.StatusText(http.StatusForbidden)
+			res.Error = toPtr(http.StatusText(http.StatusForbidden))
 			return
 		}
 
@@ -1170,7 +1172,7 @@ func handleListSubscription(db dbQuerier) http.Handler {
 		if val == nil {
 			log.Println("could not retrieve userId from context")
 			res.Status = http.StatusBadRequest
-			res.Error = http.StatusText(http.StatusBadRequest)
+			res.Error = toPtr(http.StatusText(http.StatusBadRequest))
 			return
 		}
 		userId := val.(uuid.UUID)
@@ -1179,7 +1181,7 @@ func handleListSubscription(db dbQuerier) http.Handler {
 		if err != nil {
 			log.Printf("%v: %v", UnexpectedDbError, &err)
 			res.Status = http.StatusInternalServerError
-			res.Error = http.StatusText(http.StatusInternalServerError)
+			res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
 			return
 		}
 		log.Println(subscriptions)
@@ -1198,7 +1200,7 @@ func handleUpdateSubscription(db dbQuerier) http.Handler {
 		requestBody, err := decode[subscriptionRequest](r.Body)
 		if err != nil {
 			res.Status = http.StatusBadRequest
-			res.Error = http.StatusText(http.StatusBadRequest)
+			res.Error = toPtr(http.StatusText(http.StatusBadRequest))
 			if err := encode(w, res.Status, res); err != nil {
 				log.Printf("%w: %w", ResponseFailureError, err)
 			}
@@ -1216,11 +1218,11 @@ func handleUpdateSubscription(db dbQuerier) http.Handler {
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				res.Status = http.StatusNotFound
-				res.Error = http.StatusText(http.StatusNotFound)
+				res.Error = toPtr(http.StatusText(http.StatusNotFound))
 			} else {
 				log.Printf("%v: %v", UnexpectedDbError, &err)
 				res.Status = http.StatusInternalServerError
-				res.Error = http.StatusText(http.StatusInternalServerError)
+				res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
 			}
 			return
 		}
@@ -1229,13 +1231,13 @@ func handleUpdateSubscription(db dbQuerier) http.Handler {
 		if !ok {
 			// Will fail if the userId value cannot be cast into an uuid.UUID
 			res.Status = http.StatusBadRequest
-			res.Error = http.StatusText(http.StatusBadRequest)
+			res.Error = toPtr(http.StatusText(http.StatusBadRequest))
 			return
 		}
 
 		if authenticatedUserId != existingSubscription.CreatedBy {
 			res.Status = http.StatusForbidden
-			res.Error = http.StatusText(http.StatusForbidden)
+			res.Error = toPtr(http.StatusText(http.StatusForbidden))
 			return
 		}
 
@@ -1252,7 +1254,7 @@ func handleUpdateSubscription(db dbQuerier) http.Handler {
 		if err != nil {
 			log.Printf("%v: %v", UnexpectedDbError, &err)
 			res.Status = http.StatusInternalServerError
-			res.Error = http.StatusText(http.StatusInternalServerError)
+			res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
 			return
 		}
 
@@ -1272,7 +1274,7 @@ func handleListActiveSubscription(db dbQuerier) http.Handler {
 		if val == nil {
 			log.Println("could not retrieve userId from context")
 			res.Status = http.StatusBadRequest
-			res.Error = http.StatusText(http.StatusBadRequest)
+			res.Error = toPtr(http.StatusText(http.StatusBadRequest))
 			return
 		}
 		userId := val.(uuid.UUID)
@@ -1281,7 +1283,7 @@ func handleListActiveSubscription(db dbQuerier) http.Handler {
 		if err != nil {
 			log.Printf("%v: %v", UnexpectedDbError, &err)
 			res.Status = http.StatusInternalServerError
-			res.Error = http.StatusText(http.StatusInternalServerError)
+			res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
 			return
 		}
 
@@ -1296,30 +1298,30 @@ func handleGetActiveSubscription(db dbQuerier) http.Handler {
 		defer res.respond(w)
 		userId, ok := r.Context().Value(userIdCtxKey).(uuid.UUID)
 		if !ok {
-			res.Error = http.StatusText(http.StatusForbidden)
+			res.Error = toPtr(http.StatusText(http.StatusForbidden))
 			res.Status = http.StatusForbidden
 			return
 		}
 
 		id, err := uuid.Parse(r.PathValue("id"))
 		if err != nil {
-			res.Error = "invalid id"
+			res.Error = toPtr("invalid id")
 			res.Status = http.StatusBadRequest
 		}
 
 		active_subscription, err := db.GetActiveSubscriptionById(r.Context(), id)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				res.Error = http.StatusText(http.StatusNotFound)
+				res.Error = toPtr(http.StatusText(http.StatusNotFound))
 				res.Status = http.StatusNotFound
 				return
 			}
-			res.Error = http.StatusText(http.StatusInternalServerError)
+			res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
 			res.Status = http.StatusInternalServerError
 			return
 		}
 		if active_subscription.UserID != userId {
-			res.Error = http.StatusText(http.StatusForbidden)
+			res.Error = toPtr(http.StatusText(http.StatusForbidden))
 			res.Status = http.StatusForbidden
 			return
 		}
@@ -1338,14 +1340,14 @@ func handleUpdateActiveSubscription(db dbQuerier) http.Handler {
 
 		userId, ok := r.Context().Value(userIdCtxKey).(uuid.UUID)
 		if !ok {
-			res.Error = http.StatusText(http.StatusForbidden)
+			res.Error = toPtr(http.StatusText(http.StatusForbidden))
 			res.Status = http.StatusForbidden
 			return
 		}
 
 		id, err := uuid.Parse(r.PathValue("id"))
 		if err != nil {
-			res.Error = "invalid id"
+			res.Error = toPtr("invalid id")
 			res.Status = http.StatusBadRequest
 			return
 		}
@@ -1353,17 +1355,17 @@ func handleUpdateActiveSubscription(db dbQuerier) http.Handler {
 		existingActiveSub, err := db.GetActiveSubscriptionById(r.Context(), id)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				res.Error = http.StatusText(http.StatusNotFound)
+				res.Error = toPtr(http.StatusText(http.StatusNotFound))
 				res.Status = http.StatusNotFound
 				return
 			}
 			log.Printf("error getting existing card: %v", err)
-			res.Error = http.StatusText(http.StatusInternalServerError)
+			res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
 			res.Status = http.StatusInternalServerError
 			return
 		}
 		if existingActiveSub.UserID != userId {
-			res.Error = http.StatusText(http.StatusForbidden)
+			res.Error = toPtr(http.StatusText(http.StatusForbidden))
 			res.Status = http.StatusForbidden
 			return
 		}
@@ -1371,22 +1373,22 @@ func handleUpdateActiveSubscription(db dbQuerier) http.Handler {
 		requestBody, err := decode[activeSubscriptionUpdateRequest](r.Body)
 		if err != nil {
 			log.Println("Bad request body: ", err)
-			res.Error = http.StatusText(http.StatusBadRequest)
+			res.Error = toPtr(http.StatusText(http.StatusBadRequest))
 			res.Status = http.StatusBadRequest
 			return
 		}
 
 		activeSub, err := db.UpdateActiveSubscription(r.Context(), database.UpdateActiveSubscriptionParams{
-			ID: id,
+			ID:               id,
 			BillingFrequency: requestBody.BillingFrequency,
 			AutoRenewEnabled: sql.NullBool{
-				Bool: *requestBody.AutoRenewEnabled,
+				Bool:  *requestBody.AutoRenewEnabled,
 				Valid: true,
 			},
 		})
 		if err != nil {
 			log.Printf("error updating active subscription: %v", err)
-			res.Error = http.StatusText(http.StatusInternalServerError)
+			res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
 			res.Status = http.StatusInternalServerError
 			return
 		}
@@ -1411,10 +1413,10 @@ func handleDeleteActiveSubscription(query dbQuerier) http.Handler {
 
 		if _, err := query.DeleteActiveSubscription(r.Context(), id); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				res.Error = "user not found"
+				res.Error = toPtr( "user not found")
 				res.Status = http.StatusNotFound
 			} else {
-				res.Error = http.StatusText(http.StatusInternalServerError)
+				res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
 				res.Status = http.StatusInternalServerError
 			}
 			return
@@ -1432,14 +1434,14 @@ func handleCreateActiveSubscription(db dbQuerier) http.Handler {
 
 		userId, ok := r.Context().Value(userIdCtxKey).(uuid.UUID)
 		if !ok {
-			res.Error = http.StatusText(http.StatusForbidden)
+			res.Error = toPtr(http.StatusText(http.StatusForbidden))
 			res.Status = http.StatusForbidden
 			return
 		}
 
 		newActiveSubscription, err := decode[activeSubscriptionRequest](r.Body)
 		if err != nil {
-			res.Error = http.StatusText(http.StatusBadRequest)
+			res.Error = toPtr(http.StatusText(http.StatusBadRequest))
 			res.Status = http.StatusBadRequest
 			return
 		}
@@ -1447,23 +1449,23 @@ func handleCreateActiveSubscription(db dbQuerier) http.Handler {
 		if _, err := db.GetActiveSubscriptionByUserIdAndSubId(r.Context(), database.GetActiveSubscriptionByUserIdAndSubIdParams{UserID: userId, SubscriptionID: newActiveSubscription.SubscriptionID}); err != nil {
 			if !errors.Is(err, sql.ErrNoRows) {
 				log.Printf("error getting existing card: %v", err)
-				res.Error = http.StatusText(http.StatusInternalServerError)
+				res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
 				res.Status = http.StatusInternalServerError
 				return
 			}
 		}
-		
+
 		activeSubscription, err := db.CreateActiveSubscription(r.Context(), database.CreateActiveSubscriptionParams{
-			SubscriptionID: newActiveSubscription.SubscriptionID,
-			UserID: userId,
-			CardID: newActiveSubscription.CardID,
-			UpdatedAt: time.Now(),
+			SubscriptionID:   newActiveSubscription.SubscriptionID,
+			UserID:           userId,
+			CardID:           newActiveSubscription.CardID,
+			UpdatedAt:        time.Now(),
 			BillingFrequency: newActiveSubscription.BillingFrequency,
 			AutoRenewEnabled: newActiveSubscription.AutoRenewEnabled,
 		})
 
 		if err != nil {
-			res.Error = http.StatusText(http.StatusInternalServerError)
+			res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
 			res.Status = http.StatusInternalServerError
 			return
 		}
@@ -1474,3 +1476,175 @@ func handleCreateActiveSubscription(db dbQuerier) http.Handler {
 }
 
 // --- Active trails handlers
+
+// Add these new handlers to your existing handlers.go file
+
+func handleLoginForm(dbStore dbQuerier, config *Config) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		err := r.ParseForm()
+		if err != nil {
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`<div class="alert error">Invalid form data</div>`))
+			return
+		}
+
+		email := r.FormValue("email")
+		password := r.FormValue("password")
+
+		if email == "" || password == "" {
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`<div class="alert error">Email and password are required</div>`))
+			return
+		}
+
+		// Create user request data
+		userData := userRequestData{
+			Email:    email,
+			Password: password,
+		}
+
+		// Call existing login logic
+		loginResp:= loginUser(r.Context(), dbStore, config.JWTSecret, userData)
+		if  loginResp.Error != nil {
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`<div class="alert error">Invalid email or password</div>`))
+			return
+		}
+
+		// Return JSON response for successful login
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+
+		loginJSON, err := json.Marshal(loginResp)
+		if err != nil {
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`<div class="alert error">Server error</div>`))
+			return
+		}
+
+		w.Write(loginJSON)
+	})
+}
+
+func handleRegisterForm(dbStore dbQuerier) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		err := r.ParseForm()
+		if err != nil {
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`<div class="alert error">Invalid form data</div>`))
+			return
+		}
+
+		email := r.FormValue("email")
+		password := r.FormValue("password")
+
+		if email == "" || password == "" {
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`<div class="alert error">Email and password are required</div>`))
+			return
+		}
+
+		// Create user request data
+		userData := userRequestData{
+			Email:    email,
+			Password: password,
+		}
+
+		// Call existing user creation logic
+		err = createUser(dbStore, userData)
+		if err != nil {
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`<div class="alert error">Failed to create user. Email might already be taken.</div>`))
+			return
+		}
+
+		// Return success message
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<div class="alert success">Registration successful! Please switch to login tab.</div>`))
+	})
+}
+
+func loginUser(ctx context.Context, db dbQuerier, jwtSecret string, userData userRequestData) *response {
+	var res response
+	registeredUser, err := db.GetUserByEmail(ctx, userData.Email)
+	if err != nil {
+		// TODO: This if error is ErrNoRows else internal error pattern is reused in quite a lot of different places
+		if err == sql.ErrNoRows {
+			// User does not exist in database
+			res.Status = http.StatusForbidden
+			res.Error = toPtr(http.StatusText(http.StatusForbidden))
+			return &res
+		} else {
+			res.Status = http.StatusInternalServerError)
+			res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
+			return &res
+		}
+	}
+
+	// Validate password
+	if ok := auth.IsValid(userData.Password, registeredUser.HashedPassword); !ok {
+		res.Status = http.StatusForbidden
+		res.Error = toPtr("invalid password")
+		return &res
+	}
+
+	// Make JWT token, a token lives for 60 minutes.
+	jwt, err := auth.MakeJWT(registeredUser.ID, jwtSecret, time.Minute*60)
+	if err != nil {
+		res.Status = http.StatusInternalServerError
+		res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
+		return &res
+	}
+
+	// Check if we need to create a refresh token or not
+	refreshToken, err := db.GetRefreshToken(ctx, registeredUser.ID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			newTokenString, err := auth.MakeRefreshToken()
+			if err != nil {
+				res.Status = http.StatusInternalServerError
+				res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
+				return &res
+			}
+			refreshTokenOpts := database.CreateRefreshTokenParams{
+				UserID:    registeredUser.ID,
+				ExpiresAt: time.Now().Add(time.Hour * 1440), // 60 days
+				Token:     newTokenString,
+			}
+
+			newToken, err := db.CreateRefreshToken(ctx, refreshTokenOpts)
+			if err != nil {
+				res.Status = http.StatusInternalServerError
+				res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
+				return &res
+			}
+			refreshToken = newToken
+		} else {
+			res.Status = http.StatusInternalServerError
+			res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
+			return &res
+		}
+	}
+
+	// TODO: BUG where a user cannot login when they have a revoked refresh token (because a new one is generated by cannot be inserted into the db)
+
+	// Create response body
+	res.Status = http.StatusOK
+	res.Content = loginResponseData{
+		Id:           registeredUser.ID,
+		Email:        registeredUser.Email,
+		CreatedAt:    registeredUser.CreatedAt,
+		UpdatedAt:    registeredUser.UpdatedAt,
+		Token:        jwt,
+		RefreshToken: refreshToken.Token,
+	}
+	return &res
+}

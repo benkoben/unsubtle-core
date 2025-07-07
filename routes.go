@@ -3,6 +3,7 @@ package main
 import (
 	"github.com/benkoben/unsubtle-core/internal/database"
 	"net/http"
+	"path/filepath"
 )
 
 // addRoutes accepts a pointer to a mux together all possible dependencies that we can think of using when defining the routes
@@ -12,13 +13,22 @@ func addRoutes(
 	dbStore *database.Queries,
 	// --- More different stores can be added below if necessary
 ) {
+	// Serve static HTML files
+	mux.Handle("GET /", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, filepath.Join("frontend", "index.html"))
+	}))
+
+	mux.Handle("GET /dashboard", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, filepath.Join("frontend", "dashboard.html"))
+	}))
+
 	// API requests are defined below
 	//
 	// -- Authentication handlers
-	mux.Handle("POST /login", handleLogin(dbStore, config))
+	mux.Handle("POST /login", handleLoginForm(dbStore, config))
+	mux.Handle("POST /register", handleRegisterForm(dbStore))
 	mux.Handle("POST /refresh", authenticate(handleRefresh(dbStore, config), config.JWTSecret))
 	mux.Handle("POST /revoke", authenticate(handleRevoke(dbStore, config), config.JWTSecret))
-	mux.Handle("POST /register", handleCreateUser(dbStore))
 
 	// -- Users
 	// TODO: Authorization (These handlers should only be available to admin users)
