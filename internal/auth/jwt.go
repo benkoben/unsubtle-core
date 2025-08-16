@@ -44,10 +44,12 @@ ValidateJWT validates the tokenString with tokenSecret and returns the subject. 
 */
 func ValidateJWT(tokenString, tokenSecret string) (uuid.UUID, error) {
 	claims := jwt.RegisteredClaims{}
+	// Validate that the token is signed with the correct tokenSecret
 	token, err := jwt.ParseWithClaims(tokenString, &claims, func(*jwt.Token) (any, error) {
 		return []byte(tokenSecret), nil
 	})
 	if err != nil {
+		log.Println("received invalid token (not signed with trusted secret): ", err)
 		return uuid.UUID{}, err
 	}
 
@@ -60,33 +62,34 @@ func ValidateJWT(tokenString, tokenSecret string) (uuid.UUID, error) {
 		return uuid.UUID{}, errors.New("userID is empty")
 	}
 
+	// Validates the UUID format as well
 	return uuid.Parse(userID)
 }
 
 /*
-    Retrieves the bearer token from HTTP headers. If no Authorization header is found, or if the header is
-    not formated correctly an error is returned.
+Retrieves the bearer token from HTTP headers. If no Authorization header is found, or if the header is
+not formated correctly an error is returned.
 */
-func GetBearerToken(headers http.Header)(string, error){
-    headerVal := headers.Get("Authorization")
-    if headerVal == "" {
-        return "", errors.New("Authorization header is not set")
-    }
-
-    bearer := strings.Fields(headerVal)
-	log.Println(bearer)
-	if len(bearer) < 2 || bearer[0] != "Bearer" {
-        return "", errors.New("invalid bearer token format")
+func GetBearerToken(headers http.Header) (string, error) {
+	headerVal := headers.Get("Authorization")
+	if headerVal == "" {
+		return "", errors.New("Authorization header is not set")
 	}
 
-    return bearer[1], nil
+	bearer := strings.Fields(headerVal)
+	log.Println(bearer)
+	if len(bearer) < 2 || bearer[0] != "Bearer" {
+		return "", errors.New("invalid bearer token format")
+	}
+
+	return bearer[1], nil
 }
 
 /*
-    Generates a new 256 bit string
+Generates a new 256 bit string
 */
 func MakeRefreshToken() (string, error) {
-    bToken := make([]byte, 1<<5)
+	bToken := make([]byte, 1<<5)
 	random := rand.New(rand.NewSource(time.Now().Unix()))
 	n, _ := random.Read(bToken)
 	return hex.EncodeToString(bToken[:n]), nil
