@@ -11,9 +11,8 @@ type response struct {
 	Error   *string `json:"error,omitempty"`
 }
 
-func (res *response) respond(w http.ResponseWriter) error {
+func (res *response) respond(w http.ResponseWriter) {
 	if err := encode(w, res.Status, res); err != nil {
-		return fmt.Errorf("%w: %w", ResponseFailureError, err)
+		http.Error(w, fmt.Sprintf("Unable to respond"), http.StatusInternalServerError)
 	}
-	return nil
 }

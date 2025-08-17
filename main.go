@@ -13,8 +13,10 @@ import (
 	"time"
 
 	"github.com/benkoben/unsubtle-core/internal/database"
+	auth "github.com/benkoben/unsubtle-core/internal/supabase"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
+	"github.com/supabase-community/supabase-go"
 )
 
 const (
@@ -37,16 +39,17 @@ func run(ctx context.Context, w io.Writer, getenv func(string) string) error {
 	dbConnString := getenv("DB_CONNECTION_STRING")
 	host := getenv("SVC_HOST")
 	port := getenv("SVC_PORT")
-	jwtSecret := getenv("JWT_SECRET")
+	supabaseUrl := getenv("SUPABASE_URL")
+	supabaseKey := getenv("SUPABASE_KEY")
 
 	// Validate inputs
 	if dbConnString == "" {
 		return fmt.Errorf("DB_CONNECTION_STRING not set")
 	}
 
-    if jwtSecret == "" {
-        return fmt.Errorf("JWT_SECRET not set")
-    }
+	if supabaseKey == "" || supabaseUrl == "" {
+		return fmt.Errorf("missing Supabase configuration, ensure both SUPABASE_KEY and SUPABASE_URL are set")
+	}
 
 	if host == "" {
 		host = defaultHost
@@ -60,7 +63,7 @@ func run(ctx context.Context, w io.Writer, getenv func(string) string) error {
 	config := Config{
 		Database: &DatabaseConfig{dbConnString},
 		Service:  &ServiceConfig{host, port},
-        JWTSecret: jwtSecret,
+		JwksUrl:  fmt.Sprintf("%s/%s/.well-known/jwks.json", supabaseUrl, supabase.AUTH_URL),
 	}
 
 	// Initialize database
@@ -70,11 +73,18 @@ func run(ctx context.Context, w io.Writer, getenv func(string) string) error {
 	}
 	dbStore := database.New(db)
 
+	// Initialize supabase
+	client, err := auth.NewClient(supabaseUrl, supabaseKey)
+	if err != nil {
+		fmt.Println("cannot initalize client", err)
+	}
+
 	// Initialize server
 	server := &http.Server{
 		Handler: NewServerHandler(
 			&config,
 			dbStore,
+			client,
 		),
 		Addr: config.Service.Address(),
 	}

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -13,8 +12,9 @@ import (
 	"time"
 
 	"github.com/benkoben/unsubtle-core/frontend"
-	"github.com/benkoben/unsubtle-core/internal/auth"
 	"github.com/benkoben/unsubtle-core/internal/database"
+	"github.com/benkoben/unsubtle-core/internal/password"
+	auth "github.com/benkoben/unsubtle-core/internal/supabase"
 	"github.com/google/uuid"
 	"github.com/wagslane/go-password-validator"
 
@@ -38,196 +38,7 @@ var (
 	minEntropy            = math.Log2(passwordBase)
 )
 
-// --- Authentication handlers
-func handleRevoke(db dbQuerier, cfg *Config) http.Handler {
-
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		bearer, err := auth.GetBearerToken(r.Header)
-		if err != nil {
-			// No bearer token found in headers
-			w.WriteHeader(http.StatusForbidden)
-			w.Write([]byte(http.StatusText(http.StatusForbidden)))
-			return
-		}
-
-		userId, err := auth.ValidateJWT(bearer, cfg.JWTSecret)
-		if err != nil {
-			// Bearer token was found but is not valid
-			w.WriteHeader(http.StatusForbidden)
-			w.Write([]byte(http.StatusText(http.StatusForbidden)))
-			return
-		}
-
-		refreshToken, err := db.RevokeRefreshToken(r.Context(), userId)
-		if err != nil {
-			log.Printf("revoke refresh token: %w", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(http.StatusText(http.StatusInternalServerError)))
-			return
-		}
-
-		if err := encode(w, http.StatusOK, refreshToken); err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(http.StatusText(http.StatusInternalServerError)))
-			return
-		}
-	})
-}
-
-func handleRefresh(db dbQuerier, cfg *Config) http.Handler {
-
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		bearer, err := auth.GetBearerToken(r.Header)
-		if err != nil {
-			// No bearer token found in headers
-			w.WriteHeader(http.StatusForbidden)
-			w.Write([]byte(http.StatusText(http.StatusForbidden)))
-			return
-		}
-
-		userId, err := auth.ValidateJWT(bearer, cfg.JWTSecret)
-		if err != nil {
-			// Bearer token was found but is not valid
-			w.WriteHeader(http.StatusForbidden)
-			w.Write([]byte(http.StatusText(http.StatusForbidden)))
-			return
-		}
-
-		// Check if there exists a refresh token
-		refreshToken, err := db.GetRefreshToken(r.Context(), userId)
-		if err != nil {
-			// Normally this is not possible but in rare cases where
-			// an valid JWT is used but no refreshToken exists we need to handle this.
-			if err == sql.ErrNoRows {
-				// Bearer token was found but is not valid
-				w.WriteHeader(http.StatusForbidden)
-				w.Write([]byte(http.StatusText(http.StatusForbidden)))
-				return
-			} else {
-				// Should not happend under normal circumstances
-				log.Printf("retrieve refresh token: %w", err)
-				w.WriteHeader(http.StatusInternalServerError)
-				w.Write([]byte(http.StatusText(http.StatusInternalServerError)))
-				return
-			}
-		}
-
-		// validate if the existing refresh token is not revoked
-		// if the token is revoked or expired
-		if refreshToken.RevokedAt.Valid || refreshToken.ExpiresAt.Unix() < time.Now().Unix() {
-			w.WriteHeader(http.StatusForbidden)
-			w.Write([]byte(http.StatusText(http.StatusForbidden)))
-			return
-		}
-
-		// Make JWT token, a token lives for 60 minutes.
-		jwt, err := auth.MakeJWT(userId, cfg.JWTSecret, time.Minute*60)
-		if err != nil {
-			log.Printf("could not create jwt token: %w", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(http.StatusText(http.StatusInternalServerError)))
-			return
-		}
-
-		if err := encode(w, http.StatusOK, map[string]string{"token": jwt}); err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(http.StatusText(http.StatusInternalServerError)))
-			return
-		}
-	})
-}
-
-func handleLogin(db dbQuerier, cfg *Config) http.Handler {
-	var res *response
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-
-		// Retrieve credentials from body
-		defer r.Body.Close()
-		defer res.respond(w)
-		// Lookup user in database
-		loginCredentials, err := decode[userRequestData](r.Body)
-		if err != nil {
-			log.Printf("invalid json: %v", err)
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-
-		res = loginUser(r.Context(), db, cfg.JWTSecret, loginCredentials)
-		return
-	})
-}
-
 // --- User handlers
-func handleCreateUser(query dbQuerier) http.Handler {
-	var res response
-
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Parse the email and password from the request body
-		defer r.Body.Close()
-		defer res.respond(w)
-
-		newUserData, err := decode[userRequestData](r.Body)
-		if err != nil {
-			log.Printf("error decoding json: %v", err)
-			res.Status = http.StatusBadRequest
-			return
-		}
-
-		// Validate the email
-		if ok := validEmail(newUserData.Email); !ok {
-			res.Status = http.StatusBadRequest
-			res.Error = toPtr("invalid email")
-			return
-		}
-
-		// Check if the email is already registered
-		existingUser, err := query.GetUserByEmail(r.Context(), newUserData.Email)
-		if err != nil && err != sql.ErrNoRows {
-			// If any error other than ErrNoRows is returned this means something unexpected happened.
-			res.Status = http.StatusInternalServerError
-			res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
-			return
-		}
-
-		// If existingUser contains data, this means there already exists a database entry for the requested email
-		if existingUser.Email != "" {
-			res.Status = http.StatusConflict
-			res.Error = toPtr("email is already registered")
-			return
-		}
-
-		// Validate the password criteria
-		if err := passwordvalidator.Validate(newUserData.Password, minEntropy); err != nil {
-			res.Status = http.StatusBadRequest
-			res.Error = toPtr(fmt.Sprintf("invalid password: %v", err))
-			return
-		}
-
-		// Hash the password
-		hash, err := auth.CreateHash(newUserData.Password)
-		if err != nil {
-			log.Printf("error hashing password: %v", err)
-			res.Status = http.StatusInternalServerError
-			return
-		}
-
-		// Save the user to the database
-		createUserParams := database.CreateUserParams{
-			Email:          newUserData.Email,
-			HashedPassword: hash,
-		}
-
-		dbResponse, err := query.CreateUser(r.Context(), createUserParams)
-		if err != nil {
-			log.Printf("error creating user: %v", err.Error())
-			res.Status = http.StatusInternalServerError
-			return
-		}
-
-		res.Status = http.StatusCreated
-		res.Content = dbResponse
-	})
-}
 
 func handleListUsers(query *database.Queries) http.Handler {
 	var res response
@@ -325,7 +136,7 @@ func handleUpdateUser(query *database.Queries) http.Handler {
 		}
 
 		// Hash password
-		hashedPw, err := auth.CreateHash(newUserData.Password)
+		hashedPw, err := password.CreateHash(newUserData.Password)
 		if err != nil {
 			res.Status = http.StatusInternalServerError
 			res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
@@ -361,8 +172,7 @@ func handleDeleteUser(query dbQuerier) http.Handler {
 		// Parse id from URL query
 		id, err := uuid.Parse(r.PathValue("id"))
 		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte("invalid id"))
+			http.Error(w, "invalid id", http.StatusBadRequest)
 		}
 
 		if _, err := query.DeleteUser(r.Context(), id); err != nil {
@@ -386,15 +196,15 @@ func handleListCards(query *database.Queries) http.Handler {
 		defer r.Body.Close()
 		defer res.respond(w)
 
-		userId, ok := r.Context().Value(userIdCtxKey).(uuid.UUID)
-		if !ok {
+		session, err := auth.GetSessionFromContext(r.Context())
+		if err != nil {
 			res.Error = toPtr(http.StatusText(http.StatusForbidden))
 			res.Status = http.StatusForbidden
 			return
 		}
 
 		// TODO: Authorization should be added to differentiate between all and user specific database entries.
-		dbCards, err := query.ListCardsForOwner(r.Context(), userId)
+		dbCards, err := query.ListCardsForOwner(r.Context(), *session.UserId)
 		if err != nil {
 			res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
 			res.Status = http.StatusInternalServerError
@@ -411,8 +221,8 @@ func handleDeleteCard(query dbQuerier) http.Handler {
 		defer r.Body.Close()
 		defer res.respond(w)
 
-		userId, ok := r.Context().Value(userIdCtxKey).(uuid.UUID)
-		if !ok {
+		session, err := auth.GetSessionFromContext(r.Context())
+		if err != nil {
 			res.Error = toPtr(http.StatusText(http.StatusForbidden))
 			res.Status = http.StatusForbidden
 			return
@@ -435,7 +245,7 @@ func handleDeleteCard(query dbQuerier) http.Handler {
 			res.Status = http.StatusInternalServerError
 			return
 		}
-		if card.Owner != userId {
+		if card.Owner != *session.UserId {
 			res.Error = toPtr(http.StatusText(http.StatusForbidden))
 			res.Status = http.StatusForbidden
 		}
@@ -461,8 +271,8 @@ func handleCreateCard(db dbQuerier) http.Handler {
 		defer r.Body.Close()
 		defer res.respond(w)
 
-		userId, ok := r.Context().Value(userIdCtxKey).(uuid.UUID)
-		if !ok {
+		session, err := auth.GetSessionFromContext(r.Context())
+		if err != nil {
 			res.Error = toPtr(http.StatusText(http.StatusForbidden))
 			res.Status = http.StatusForbidden
 			return
@@ -477,7 +287,7 @@ func handleCreateCard(db dbQuerier) http.Handler {
 
 		if _, err := db.GetCardByName(r.Context(), database.GetCardByNameParams{
 			Name:  newCard.Name,
-			Owner: userId,
+			Owner: *session.UserId,
 		}); err != nil {
 			// If the card does not exist, this is a good thing. Otherwise something unexpected happened
 			if !errors.Is(err, sql.ErrNoRows) {
@@ -491,7 +301,7 @@ func handleCreateCard(db dbQuerier) http.Handler {
 		card, err := db.CreateCard(r.Context(), database.CreateCardParams{
 			Name:      newCard.Name,
 			ExpiresAt: newCard.ExpiresAt,
-			Owner:     userId,
+			Owner:     *session.UserId,
 		})
 
 		if err != nil {
@@ -511,8 +321,8 @@ func handleGetCard(query dbQuerier) http.Handler {
 		defer r.Body.Close()
 		defer res.respond(w)
 
-		userId, ok := r.Context().Value(userIdCtxKey).(uuid.UUID)
-		if !ok {
+		session, err := auth.GetSessionFromContext(r.Context())
+		if err != nil {
 			res.Error = toPtr(http.StatusText(http.StatusForbidden))
 			res.Status = http.StatusForbidden
 			return
@@ -535,7 +345,7 @@ func handleGetCard(query dbQuerier) http.Handler {
 			res.Status = http.StatusInternalServerError
 			return
 		}
-		if card.Owner != userId {
+		if card.Owner != *session.UserId {
 			res.Error = toPtr(http.StatusText(http.StatusForbidden))
 			res.Status = http.StatusForbidden
 			return
@@ -553,8 +363,8 @@ func handleUpdateCard(db dbQuerier) http.Handler {
 		defer r.Body.Close()
 		defer res.respond(w)
 
-		userId, ok := r.Context().Value(userIdCtxKey).(uuid.UUID)
-		if !ok {
+		session, err := auth.GetSessionFromContext(r.Context())
+		if err != nil {
 			res.Error = toPtr(http.StatusText(http.StatusForbidden))
 			res.Status = http.StatusForbidden
 			return
@@ -579,7 +389,7 @@ func handleUpdateCard(db dbQuerier) http.Handler {
 			res.Status = http.StatusInternalServerError
 			return
 		}
-		if existingCard.Owner != userId {
+		if existingCard.Owner != *session.UserId {
 			res.Error = toPtr(http.StatusText(http.StatusForbidden))
 			res.Status = http.StatusForbidden
 			return
@@ -635,19 +445,17 @@ func handleCreateCategory(db dbQuerier) http.Handler {
 			return
 		}
 
-		// Retrieve userId from Context (set by middleware)
-		val := r.Context().Value(userIdCtxKey)
-		if val == nil {
-			log.Println("could not retrieve userId from context")
-			res.Status = http.StatusBadRequest
-			res.Error = toPtr(http.StatusText(http.StatusBadRequest))
+		session, err := auth.GetSessionFromContext(r.Context())
+		if err != nil {
+			log.Printf("error getting session key from context: %v", err)
+			res.Error = toPtr(http.StatusText(http.StatusForbidden))
+			res.Status = http.StatusForbidden
 			return
 		}
-		userId := val.(uuid.UUID)
 
 		if _, err := db.CheckExistingCategory(r.Context(), database.CheckExistingCategoryParams{
 			Name:      requestBody.Name,
-			CreatedBy: userId,
+			CreatedBy: *session.UserId,
 		}); err != nil {
 			if !errors.Is(err, sql.ErrNoRows) {
 				res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
@@ -664,7 +472,7 @@ func handleCreateCategory(db dbQuerier) http.Handler {
 		category, err := db.CreateCategory(r.Context(), database.CreateCategoryParams{
 			Name:        requestBody.Name,
 			Description: requestBody.Description,
-			CreatedBy:   userId,
+			CreatedBy:   *session.UserId,
 		})
 
 		if err != nil {
@@ -720,15 +528,14 @@ func handleUpdateCategory(db dbQuerier) http.Handler {
 			return
 		}
 
-		authenticatedUserId, ok := r.Context().Value(userIdCtxKey).(uuid.UUID)
-		if !ok {
-			// Check that the userId is not malformed
-			res.Status = http.StatusBadRequest
-			res.Error = toPtr(http.StatusText(http.StatusBadRequest))
+		session, err := auth.GetSessionFromContext(r.Context())
+		if err != nil {
+			res.Error = toPtr(http.StatusText(http.StatusForbidden))
+			res.Status = http.StatusForbidden
 			return
 		}
 
-		if authenticatedUserId != existingCategory.CreatedBy {
+		if *session.UserId != existingCategory.CreatedBy {
 			res.Status = http.StatusForbidden
 			res.Error = toPtr(http.StatusText(http.StatusForbidden))
 			return
@@ -763,16 +570,15 @@ func handleListCategory(db dbQuerier) http.Handler {
 		// - Normal user = ListByUserID
 
 		// Retrieve userId from Context (set by middleware)
-		val := r.Context().Value(userIdCtxKey)
-		if val == nil {
-			log.Println("could not retrieve userId from context")
-			res.Status = http.StatusBadRequest
-			res.Error = toPtr(http.StatusText(http.StatusBadRequest))
+		session, err := auth.GetSessionFromContext(r.Context())
+		if err != nil {
+			log.Printf("error getting session key from context: %v", err)
+			res.Error = toPtr(http.StatusText(http.StatusForbidden))
+			res.Status = http.StatusForbidden
 			return
 		}
-		userId := val.(uuid.UUID)
 
-		categories, err := db.ListCategoriesForUserId(r.Context(), userId)
+		categories, err := db.ListCategoriesForUserId(r.Context(), *session.UserId)
 		if err != nil {
 			log.Printf("%w: %w", UnexpectedDbError, &err)
 			res.Status = http.StatusInternalServerError
@@ -791,15 +597,13 @@ func handleGetCategory(db dbQuerier) http.Handler {
 		defer r.Body.Close()
 		defer res.respond(w)
 
-		// Retrieve the currently authenticated user from context
-		val := r.Context().Value(userIdCtxKey)
-		if val == nil {
-			log.Println("could not retrieve userId from context")
-			res.Status = http.StatusBadRequest
-			res.Error = toPtr(http.StatusText(http.StatusBadRequest))
+		session, err := auth.GetSessionFromContext(r.Context())
+		if err != nil {
+			log.Printf("error getting session key from context: %v", err)
+			res.Error = toPtr(http.StatusText(http.StatusForbidden))
+			res.Status = http.StatusForbidden
 			return
 		}
-		userId := val.(uuid.UUID)
 
 		// Parse id from URL path
 		log.Println(r.PathValue("id"))
@@ -821,7 +625,7 @@ func handleGetCategory(db dbQuerier) http.Handler {
 			return
 		}
 
-		if category.CreatedBy != userId {
+		if category.CreatedBy != *session.UserId {
 			res.Status = http.StatusForbidden
 			res.Error = toPtr(http.StatusText(http.StatusForbidden))
 			return
@@ -839,20 +643,19 @@ func handleDeleteCategory(db dbQuerier) http.Handler {
 		defer r.Body.Close()
 		defer res.respond(w)
 		// Retrieve the currently authenticated user from context
-		val := r.Context().Value(userIdCtxKey)
-		if val == nil {
-			log.Println("could not retrieve userId from context")
-			res.Status = http.StatusBadRequest
-			res.Error = toPtr(http.StatusText(http.StatusBadRequest))
+
+		session, err := auth.GetSessionFromContext(r.Context())
+		if err != nil {
+			log.Printf("error getting session key from context: %v", err)
+			res.Error = toPtr(http.StatusText(http.StatusForbidden))
+			res.Status = http.StatusForbidden
 			return
 		}
-		userId := val.(uuid.UUID)
 
 		// Parse id from URL path
 		id, err := uuid.Parse(r.PathValue("id"))
 		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte("invalid id"))
+			http.Error(w, "invalid id", http.StatusBadRequest)
 			return
 		}
 
@@ -868,7 +671,7 @@ func handleDeleteCategory(db dbQuerier) http.Handler {
 		}
 
 		// Check if the currently authenticated user is allowed to delete
-		if category.CreatedBy != userId {
+		if category.CreatedBy != *session.UserId {
 			res.Status = http.StatusForbidden
 			res.Error = toPtr(http.StatusText(http.StatusForbidden))
 			return
@@ -899,15 +702,13 @@ func handleCreateSubscription(db dbQuerier) http.Handler {
 		defer r.Body.Close()
 		defer res.respond(w)
 
-		// Retrieve userId from Context (set by middleware)
-		val := r.Context().Value(userIdCtxKey)
-		if val == nil {
-			log.Println("could not retrieve userId from context")
-			res.Status = http.StatusBadRequest
-			res.Error = toPtr(http.StatusText(http.StatusBadRequest))
+		session, err := auth.GetSessionFromContext(r.Context())
+		if err != nil {
+			log.Printf("error getting session key from context: %v", err)
+			res.Error = toPtr(http.StatusText(http.StatusForbidden))
+			res.Status = http.StatusForbidden
 			return
 		}
-		userId := val.(uuid.UUID)
 
 		newSubscriptionData, err := decode[subscriptionRequest](r.Body)
 		if err != nil {
@@ -918,7 +719,7 @@ func handleCreateSubscription(db dbQuerier) http.Handler {
 
 		// Check if the subscriptions is already registered
 		existingSubscription, err := db.GetSubscriptionByNameAndCreator(r.Context(), database.GetSubscriptionByNameAndCreatorParams{
-			CreatedBy: userId,
+			CreatedBy: *session.UserId,
 			Name:      newSubscriptionData.Name,
 		})
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -947,7 +748,7 @@ func handleCreateSubscription(db dbQuerier) http.Handler {
 
 		// Save the user to the database
 		createSubscriptionParams := database.CreateSubscriptionParams{
-			CreatedBy:      userId,
+			CreatedBy:      *session.UserId,
 			Name:           newSubscriptionData.Name,
 			MonthlyCost:    newSubscriptionData.MonthlyCost,
 			Currency:       newSubscriptionData.Currency,
@@ -973,20 +774,18 @@ func handleDeleteSubscription(db dbQuerier) http.Handler {
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Retrieve the currently authenticated user from context
-		val := r.Context().Value(userIdCtxKey)
-		if val == nil {
-			log.Println("could not retrieve userId from context")
-			res.Status = http.StatusBadRequest
-			res.Error = toPtr(http.StatusText(http.StatusBadRequest))
+		session, err := auth.GetSessionFromContext(r.Context())
+		if err != nil {
+			log.Printf("error getting session key from context: %v", err)
+			res.Error = toPtr(http.StatusText(http.StatusForbidden))
+			res.Status = http.StatusForbidden
 			return
 		}
-		userId := val.(uuid.UUID)
 
 		// Parse id from URL path
 		id, err := uuid.Parse(r.PathValue("id"))
 		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte("invalid id"))
+			http.Error(w, "invalid id", http.StatusBadRequest)
 			return
 		}
 
@@ -1002,7 +801,7 @@ func handleDeleteSubscription(db dbQuerier) http.Handler {
 		}
 
 		// Check if the currently authenticated user is allowed to delete
-		if subscription.CreatedBy != userId {
+		if subscription.CreatedBy != *session.UserId {
 			res.Status = http.StatusForbidden
 			res.Error = toPtr(http.StatusText(http.StatusForbidden))
 			return
@@ -1031,22 +830,20 @@ func handleGetSubscription(db dbQuerier) http.Handler {
 		defer res.respond(w)
 
 		// Retrieve the currently authenticated user from context
-		val := r.Context().Value(userIdCtxKey)
-		if val == nil {
-			log.Println("could not retrieve userId from context")
-			res.Status = http.StatusBadRequest
-			res.Error = toPtr(http.StatusText(http.StatusBadRequest))
+		session, err := auth.GetSessionFromContext(r.Context())
+		if err != nil {
+			log.Printf("error getting session key from context: %v", err)
+			res.Error = toPtr(http.StatusText(http.StatusForbidden))
+			res.Status = http.StatusForbidden
 			return
 		}
-		userId := val.(uuid.UUID)
 
 		// Parse id from URL path
 		log.Println(r.PathValue("id"))
 		log.Println(r.URL.String())
 		id, err := uuid.Parse(r.PathValue("id"))
 		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte("invalid id"))
+			http.Error(w, "invalid id", http.StatusBadRequest)
 			return
 		}
 
@@ -1060,7 +857,7 @@ func handleGetSubscription(db dbQuerier) http.Handler {
 			return
 		}
 
-		if subscription.CreatedBy != userId {
+		if subscription.CreatedBy != *session.UserId {
 			res.Status = http.StatusForbidden
 			res.Error = toPtr(http.StatusText(http.StatusForbidden))
 			return
@@ -1081,16 +878,14 @@ func handleListSubscription(db dbQuerier) http.Handler {
 		// - Normal user = ListByUserID
 
 		// Retrieve userId from Context (set by middleware)
-		val := r.Context().Value(userIdCtxKey)
-		if val == nil {
-			log.Println("could not retrieve userId from context")
-			res.Status = http.StatusBadRequest
-			res.Error = toPtr(http.StatusText(http.StatusBadRequest))
+		session, err := auth.GetSessionFromContext(r.Context())
+		if err != nil {
+			res.Error = toPtr(http.StatusText(http.StatusForbidden))
+			res.Status = http.StatusForbidden
 			return
 		}
-		userId := val.(uuid.UUID)
 
-		subscriptions, err := db.ListSubscriptionsForUserId(r.Context(), userId)
+		subscriptions, err := db.ListSubscriptionsForUserId(r.Context(), *session.UserId)
 		if err != nil {
 			log.Printf("%v: %v", UnexpectedDbError, &err)
 			res.Status = http.StatusInternalServerError
@@ -1140,15 +935,15 @@ func handleUpdateSubscription(db dbQuerier) http.Handler {
 			return
 		}
 
-		authenticatedUserId, ok := r.Context().Value(userIdCtxKey).(uuid.UUID)
-		if !ok {
-			// Will fail if the userId value cannot be cast into an uuid.UUID
-			res.Status = http.StatusBadRequest
-			res.Error = toPtr(http.StatusText(http.StatusBadRequest))
+		session, err := auth.GetSessionFromContext(r.Context())
+		if err != nil {
+			log.Printf("error getting session key from context: %v", err)
+			res.Error = toPtr(http.StatusText(http.StatusForbidden))
+			res.Status = http.StatusForbidden
 			return
 		}
 
-		if authenticatedUserId != existingSubscription.CreatedBy {
+		if *session.UserId != existingSubscription.CreatedBy {
 			res.Status = http.StatusForbidden
 			res.Error = toPtr(http.StatusText(http.StatusForbidden))
 			return
@@ -1182,17 +977,15 @@ func handleListActiveSubscription(db dbQuerier) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer res.respond(w)
 
-		// Retrieve userId from Context (set by middleware)
-		val := r.Context().Value(userIdCtxKey)
-		if val == nil {
-			log.Println("could not retrieve userId from context")
-			res.Status = http.StatusBadRequest
-			res.Error = toPtr(http.StatusText(http.StatusBadRequest))
+		session, err := auth.GetSessionFromContext(r.Context())
+		if err != nil {
+			log.Printf("error getting session key from context: %v", err)
+			res.Error = toPtr(http.StatusText(http.StatusForbidden))
+			res.Status = http.StatusForbidden
 			return
 		}
-		userId := val.(uuid.UUID)
 
-		active_subscriptions, err := db.ListActiveSubscriptionByUserId(r.Context(), userId)
+		active_subscriptions, err := db.ListActiveSubscriptionByUserId(r.Context(), *session.UserId)
 		if err != nil {
 			log.Printf("%v: %v", UnexpectedDbError, &err)
 			res.Status = http.StatusInternalServerError
@@ -1209,8 +1002,9 @@ func handleGetActiveSubscription(db dbQuerier) http.Handler {
 	var res response
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer res.respond(w)
-		userId, ok := r.Context().Value(userIdCtxKey).(uuid.UUID)
-		if !ok {
+		session, err := auth.GetSessionFromContext(r.Context())
+		if err != nil {
+			log.Printf("error getting session key from context: %v", err)
 			res.Error = toPtr(http.StatusText(http.StatusForbidden))
 			res.Status = http.StatusForbidden
 			return
@@ -1233,7 +1027,7 @@ func handleGetActiveSubscription(db dbQuerier) http.Handler {
 			res.Status = http.StatusInternalServerError
 			return
 		}
-		if active_subscription.UserID != userId {
+		if active_subscription.UserID != *session.UserId {
 			res.Error = toPtr(http.StatusText(http.StatusForbidden))
 			res.Status = http.StatusForbidden
 			return
@@ -1251,8 +1045,9 @@ func handleUpdateActiveSubscription(db dbQuerier) http.Handler {
 		defer r.Body.Close()
 		defer res.respond(w)
 
-		userId, ok := r.Context().Value(userIdCtxKey).(uuid.UUID)
-		if !ok {
+		session, err := auth.GetSessionFromContext(r.Context())
+		if err != nil {
+			log.Printf("error getting session key from context: %v", err)
 			res.Error = toPtr(http.StatusText(http.StatusForbidden))
 			res.Status = http.StatusForbidden
 			return
@@ -1277,7 +1072,7 @@ func handleUpdateActiveSubscription(db dbQuerier) http.Handler {
 			res.Status = http.StatusInternalServerError
 			return
 		}
-		if existingActiveSub.UserID != userId {
+		if existingActiveSub.UserID != *session.UserId {
 			res.Error = toPtr(http.StatusText(http.StatusForbidden))
 			res.Status = http.StatusForbidden
 			return
@@ -1320,8 +1115,8 @@ func handleDeleteActiveSubscription(query dbQuerier) http.Handler {
 		// Parse id from URL query
 		id, err := uuid.Parse(r.PathValue("id"))
 		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte("invalid id"))
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
 		}
 
 		if _, err := query.DeleteActiveSubscription(r.Context(), id); err != nil {
@@ -1345,8 +1140,8 @@ func handleCreateActiveSubscription(db dbQuerier) http.Handler {
 		defer r.Body.Close()
 		defer res.respond(w)
 
-		userId, ok := r.Context().Value(userIdCtxKey).(uuid.UUID)
-		if !ok {
+		session, err := auth.GetSessionFromContext(r.Context())
+		if err != nil {
 			res.Error = toPtr(http.StatusText(http.StatusForbidden))
 			res.Status = http.StatusForbidden
 			return
@@ -1359,7 +1154,7 @@ func handleCreateActiveSubscription(db dbQuerier) http.Handler {
 			return
 		}
 
-		if _, err := db.GetActiveSubscriptionByUserIdAndSubId(r.Context(), database.GetActiveSubscriptionByUserIdAndSubIdParams{UserID: userId, SubscriptionID: newActiveSubscription.SubscriptionID}); err != nil {
+		if _, err := db.GetActiveSubscriptionByUserIdAndSubId(r.Context(), database.GetActiveSubscriptionByUserIdAndSubIdParams{UserID: *session.UserId, SubscriptionID: newActiveSubscription.SubscriptionID}); err != nil {
 			if !errors.Is(err, sql.ErrNoRows) {
 				log.Printf("error getting existing card: %v", err)
 				res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
@@ -1370,7 +1165,7 @@ func handleCreateActiveSubscription(db dbQuerier) http.Handler {
 
 		activeSubscription, err := db.CreateActiveSubscription(r.Context(), database.CreateActiveSubscriptionParams{
 			SubscriptionID:   newActiveSubscription.SubscriptionID,
-			UserID:           userId,
+			UserID:           *session.UserId,
 			CardID:           newActiveSubscription.CardID,
 			UpdatedAt:        time.Now(),
 			BillingFrequency: newActiveSubscription.BillingFrequency,
@@ -1392,7 +1187,7 @@ func handleCreateActiveSubscription(db dbQuerier) http.Handler {
 
 // Add these new handlers to your existing handlers.go file
 
-func handleLoginForm(dbStore dbQuerier, config *Config) http.Handler {
+func handleLoginForm(authClient AuthClient) http.Handler {
 	var htmxAlert frontend.HtmxResponse
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer htmxAlert.Respond(w)
@@ -1412,16 +1207,9 @@ func handleLoginForm(dbStore dbQuerier, config *Config) http.Handler {
 			return
 		}
 
-		// Create user request data
-		userData := userRequestData{
-			Email:    email,
-			Password: password,
-		}
-
-		// Call existing login logic
-		loginResp := loginUser(r.Context(), dbStore, config.JWTSecret, userData)
-		if loginResp.Error != nil {
-			fmt.Println(*loginResp.Error)
+		// Here we add Supabase login
+		session, err := authClient.LoginWithEmailAndPassword(email, password)
+		if err != nil {
 			htmxAlert = frontend.InvalidEmailOrPasswordError
 			return
 		}
@@ -1430,12 +1218,13 @@ func handleLoginForm(dbStore dbQuerier, config *Config) http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 
-		loginJSON, err := json.Marshal(loginResp.Content)
+		loginJSON, err := json.Marshal(session)
 		if err != nil {
 			htmxAlert = frontend.ServerError
 			return
 		}
 
+		w.WriteHeader(http.StatusOK)
 		htmxAlert = frontend.HtmxResponse(loginJSON)
 	})
 }
@@ -1483,79 +1272,39 @@ func handleRegisterForm(dbStore dbQuerier) http.Handler {
 	})
 }
 
-func loginUser(ctx context.Context, db dbQuerier, jwtSecret string, userData userRequestData) *response {
-	var res response
-	registeredUser, err := db.GetUserByEmail(ctx, userData.Email)
-	if err != nil {
-		// TODO: This if error is ErrNoRows else internal error pattern is reused in quite a lot of different places
-		if err == sql.ErrNoRows {
-			// User does not exist in database
-			res.Status = http.StatusForbidden
-			res.Error = toPtr(http.StatusText(http.StatusForbidden))
-			return &res
-		} else {
-			res.Status = http.StatusInternalServerError
-			res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
-			return &res
+func handleTokenValidation(authClient AuthClient) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := authClient.ValidateTokenFromHeader(r.Header); err != nil {
+			log.Printf("error validating token: %v", err)
+			http.Error(w, err.Error(), http.StatusForbidden)
+			return
 		}
-	}
 
-	// Validate password
-	if ok := auth.IsValid(userData.Password, registeredUser.HashedPassword); !ok {
-		res.Status = http.StatusForbidden
-		res.Error = toPtr("invalid password")
-		return &res
-	}
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
 
-	// Make JWT token, a token lives for 60 minutes.
-	jwt, err := auth.MakeJWT(registeredUser.ID, jwtSecret, time.Minute*60)
-	if err != nil {
-		res.Status = http.StatusInternalServerError
-		res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
-		return &res
-	}
-
-	// Check if we need to create a refresh token or not
-	refreshToken, err := db.GetRefreshToken(ctx, registeredUser.ID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			newTokenString, err := auth.MakeRefreshToken()
-			if err != nil {
-				res.Status = http.StatusInternalServerError
-				res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
-				return &res
-			}
-			refreshTokenOpts := database.CreateRefreshTokenParams{
-				UserID:    registeredUser.ID,
-				ExpiresAt: time.Now().Add(time.Hour * 1440), // 60 days
-				Token:     newTokenString,
-			}
-
-			newToken, err := db.CreateRefreshToken(ctx, refreshTokenOpts)
-			if err != nil {
-				res.Status = http.StatusInternalServerError
-				res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
-				return &res
-			}
-			refreshToken = newToken
-		} else {
-			res.Status = http.StatusInternalServerError
-			res.Error = toPtr(http.StatusText(http.StatusInternalServerError))
-			return &res
+func handleTokenRequest(authClient AuthClient) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var userCredentials userRequestData
+		if err := json.NewDecoder(r.Body).Decode(&userCredentials); err != nil {
+			log.Printf("error decoding token request: %v", err)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
 		}
-	}
 
-	// TODO: BUG where a user cannot login when they have a revoked refresh token (because a new one is generated by cannot be inserted into the db)
+		session, err := authClient.LoginWithEmailAndPassword(userCredentials.Email, userCredentials.Password)
+		if err != nil {
+			log.Printf("error getting session: %v", err)
+			http.Error(w, err.Error(), http.StatusForbidden)
+			return
+		}
 
-	// Create response body
-	res.Status = http.StatusOK
-	res.Content = loginResponseData{
-		Id:           registeredUser.ID,
-		Email:        registeredUser.Email,
-		CreatedAt:    registeredUser.CreatedAt,
-		UpdatedAt:    registeredUser.UpdatedAt,
-		Token:        jwt,
-		RefreshToken: refreshToken.Token,
-	}
-	return &res
+		if err := json.NewEncoder(w).Encode(session); err != nil {
+			log.Printf("error encoding session: %v", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	})
 }

@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"github.com/benkoben/unsubtle-core/internal/auth"
 	"github.com/benkoben/unsubtle-core/internal/database"
+	"github.com/benkoben/unsubtle-core/internal/password"
 	passwordvalidator "github.com/wagslane/go-password-validator"
 	"io"
 	"log"
@@ -73,7 +73,7 @@ func createUser(ctx context.Context, db dbQuerier, userData userRequestData) *re
 	}
 
 	// Hash the password
-	hash, err := auth.CreateHash(userData.Password)
+	hash, err := password.CreateHash(userData.Password)
 	if err != nil {
 		log.Printf("error hashing password: %v", err)
 		res.Status = http.StatusInternalServerError
