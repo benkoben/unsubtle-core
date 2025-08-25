@@ -243,17 +243,7 @@
 
             // Handle successful login (only for login form)
             if (event.detail.xhr.status === 200 && form.id === 'login-form') {
-                try {
-                    const response = JSON.parse(event.detail.xhr.responseText);
-                    if (response.access_token) {
-                        // Store token and redirect to dashboard
-                        localStorage.setItem('token', response.access_token);
-                        localStorage.setItem('refreshToken', response.refresh_token);
-                        window.location.href = '/dashboard';
-                    }
-                } catch (e) {
-                    console.log('Response is not JSON, treating as HTML');
-                }
+                window.location.href = '/dashboard';
             }
         });
 

@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/benkoben/unsubtle-core/frontend"
+	auth "github.com/benkoben/unsubtle-core/internal/auth_client"
 	"github.com/benkoben/unsubtle-core/internal/database"
 	"github.com/benkoben/unsubtle-core/internal/password"
-	auth "github.com/benkoben/unsubtle-core/internal/supabase"
 	"github.com/google/uuid"
 	"github.com/wagslane/go-password-validator"
 
@@ -1187,45 +1187,83 @@ func handleCreateActiveSubscription(db dbQuerier) http.Handler {
 
 // Add these new handlers to your existing handlers.go file
 
-func handleLoginForm(authClient AuthClient) http.Handler {
-	var htmxAlert frontend.HtmxResponse
+func handleRefreshToken(authClient auth.Client) http.Handler {
+	log.Println("handling refresh token")
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer htmxAlert.Respond(w)
+		defer r.Body.Close()
+
+		refreshToken, err := r.Cookie("refresh_token")
+		if err != nil {
+			http.Redirect(w, r, "/", http.StatusUnauthorized)
+			return
+		}
+
+		session, err := authClient.RefreshToken(refreshToken.Value)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusUnauthorized)
+		}
+
+		setAuthCookiePair(w, *session.AccessToken, *session.RefreshToken)
+	})
+}
+
+func setAuthCookiePair(w http.ResponseWriter, accessToken string, refreshToken string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "auth_token",
+		Value:    accessToken,
+		HttpOnly: true,
+		Secure:   true,                    // TODO: toggle this later
+		SameSite: http.SameSiteStrictMode, // or Lax if needed
+		Path:     "/",
+	})
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     "refresh_token",
+		Value:    refreshToken,
+		HttpOnly: true,
+		Secure:   true,                    // TODO: toggle this later
+		SameSite: http.SameSiteStrictMode, // or Lax if needed
+		Path:     "/auth/refresh",
+	})
+}
+
+func handleLoginForm(authClient auth.Client) http.Handler {
+	var htmxAlert frontend.HtmxResponse
+
+	type UserInfo struct {
+		Email  string `json:"email"`
+		UserId string `json:"userId"`
+	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 
 		err := r.ParseForm()
 		if err != nil {
 			htmxAlert = frontend.InvalidFormDataError
+			htmxAlert.Respond(w)
 			return
 		}
 
 		email := r.FormValue("email")
-		password := r.FormValue("password")
+		pwd := r.FormValue("password")
 
-		if email == "" || password == "" {
+		if email == "" || pwd == "" {
 			htmxAlert = frontend.EmailAndPasswordError
+			htmxAlert.Respond(w)
 			return
 		}
 
 		// Here we add Supabase login
-		session, err := authClient.LoginWithEmailAndPassword(email, password)
+		session, err := authClient.SignInWithEmailPassword(email, pwd)
 		if err != nil {
 			htmxAlert = frontend.InvalidEmailOrPasswordError
+			htmxAlert.Respond(w)
 			return
 		}
 
-		// Return JSON response for successful login
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
+		setAuthCookiePair(w, *session.AccessToken, *session.RefreshToken)
 
-		loginJSON, err := json.Marshal(session)
-		if err != nil {
-			htmxAlert = frontend.ServerError
-			return
-		}
-
-		w.WriteHeader(http.StatusOK)
-		htmxAlert = frontend.HtmxResponse(loginJSON)
 	})
 }
 
@@ -1272,19 +1310,15 @@ func handleRegisterForm(dbStore dbQuerier) http.Handler {
 	})
 }
 
-func handleTokenValidation(authClient AuthClient) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if _, err := authClient.ValidateTokenFromHeader(r.Header); err != nil {
-			log.Printf("error validating token: %v", err)
-			http.Error(w, err.Error(), http.StatusForbidden)
-			return
-		}
-
-		w.WriteHeader(http.StatusNoContent)
-	})
+func handleAuthCheck() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// If you're here, the middleware has already validated the JWT
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	}
 }
 
-func handleTokenRequest(authClient AuthClient) http.Handler {
+func handleTokenRequest(authClient auth.Client) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		var userCredentials userRequestData
@@ -1294,7 +1328,7 @@ func handleTokenRequest(authClient AuthClient) http.Handler {
 			return
 		}
 
-		session, err := authClient.LoginWithEmailAndPassword(userCredentials.Email, userCredentials.Password)
+		session, err := authClient.SignInWithEmailPassword(userCredentials.Email, userCredentials.Password)
 		if err != nil {
 			log.Printf("error getting session: %v", err)
 			http.Error(w, err.Error(), http.StatusForbidden)

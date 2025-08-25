@@ -5,25 +5,20 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="678db3d6-0090-4be8-9ec5-05c938764e3c" name="Changes" comment="Add new card and subscription handlers">
-      <change afterPath="$PROJECT_DIR$/internal/supabase/client.go" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/internal/supabase/session.go" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/internal/supabase/token.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.env" beforeDir="false" afterPath="$PROJECT_DIR$/.env" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/internal/auth_client/client.go" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/internal/auth_client/session.go" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/internal/auth_client/supabase.go" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/internal/logging/logging.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/config.go" beforeDir="false" afterPath="$PROJECT_DIR$/config.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/database_interface.go" beforeDir="false" afterPath="$PROJECT_DIR$/interfaces.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/html/dashboard.html" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/html/dashboard.html" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/frontend/html/index.html" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/html/index.html" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/go.mod" beforeDir="false" afterPath="$PROJECT_DIR$/go.mod" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/go.sum" beforeDir="false" afterPath="$PROJECT_DIR$/go.sum" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/static/js/token.js" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/static/js/token.js" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/handlers.go" beforeDir="false" afterPath="$PROJECT_DIR$/handlers.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/helpers.go" beforeDir="false" afterPath="$PROJECT_DIR$/helpers.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/internal/auth/jwt.go" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/internal/auth/jwt_test.go" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/internal/auth/password.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/password/password.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/internal/auth/password_test.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/password/password_test.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/interfaces.go" beforeDir="false" afterPath="$PROJECT_DIR$/interfaces.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/supabase/client.go" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/supabase/session.go" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/supabase/token.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/auth_client/token.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/main.go" beforeDir="false" afterPath="$PROJECT_DIR$/main.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/middleware.go" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/response.go" beforeDir="false" afterPath="$PROJECT_DIR$/response.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/routes.go" beforeDir="false" afterPath="$PROJECT_DIR$/routes.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/server.go" beforeDir="false" afterPath="$PROJECT_DIR$/server.go" afterDir="false" />
     </list>

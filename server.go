@@ -1,6 +1,7 @@
 package main
 
 import (
+	auth "github.com/benkoben/unsubtle-core/internal/auth_client"
 	"github.com/benkoben/unsubtle-core/internal/database"
 	"net/http"
 )
@@ -8,7 +9,7 @@ import (
 func NewServerHandler(
 	config *Config,
 	dbStore *database.Queries,
-	authClient AuthClient,
+	authClient auth.Client,
 ) http.Handler {
 	// Prepare the mux
 	mux := http.NewServeMux()

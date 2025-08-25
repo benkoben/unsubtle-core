@@ -12,8 +12,9 @@ import (
 	"os/signal"
 	"time"
 
+	auth "github.com/benkoben/unsubtle-core/internal/auth_client"
 	"github.com/benkoben/unsubtle-core/internal/database"
-	auth "github.com/benkoben/unsubtle-core/internal/supabase"
+	"github.com/benkoben/unsubtle-core/internal/logging"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 	"github.com/supabase-community/supabase-go"
@@ -73,19 +74,23 @@ func run(ctx context.Context, w io.Writer, getenv func(string) string) error {
 	}
 	dbStore := database.New(db)
 
-	// Initialize supabase
-	client, err := auth.NewClient(supabaseUrl, supabaseKey)
+	// Initialize auth_client
+	supabaseClient, err := auth.NewSupabaseClient(supabaseUrl, supabaseKey)
 	if err != nil {
 		fmt.Println("cannot initalize client", err)
+	}
+	client, err := auth.NewClient(supabaseClient)
+	if err != nil {
+		fmt.Println("cannot initialize client", err)
 	}
 
 	// Initialize server
 	server := &http.Server{
-		Handler: NewServerHandler(
+		Handler: logging.LoggingMiddleware(NewServerHandler(
 			&config,
 			dbStore,
-			client,
-		),
+			*client,
+		)),
 		Addr: config.Service.Address(),
 	}
 

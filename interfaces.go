@@ -3,9 +3,6 @@ package main
 import (
 	"context"
 	"database/sql"
-	"github.com/supabase-community/gotrue-go/types"
-	"net/http"
-
 	"github.com/benkoben/unsubtle-core/internal/database"
 	"github.com/google/uuid"
 )
@@ -63,12 +60,4 @@ type dbQuerier interface {
 	DeleteActiveSubscription(ctx context.Context, id uuid.UUID) (sql.Result, error)
 	CreateActiveSubscription(ctx context.Context, arg database.CreateActiveSubscriptionParams) (database.ActiveSubscription, error)
 	GetActiveSubscriptionByUserIdAndSubId(ctx context.Context, arg database.GetActiveSubscriptionByUserIdAndSubIdParams) (database.ActiveSubscription, error)
-}
-
-type AuthClient interface {
-	LoginWithEmailAndPassword(email, password string) (types.Session, error)
-	ValidateTokenFromHeader(header http.Header) (*types.Session, error)
-	ValidateTokenFromHandler(next http.Handler) http.Handler
-	// RefreshToken(ctx context.Context, refreshToken string) (string, error)
-	// RevokeToken(ctx context.Context, bearerToken string) (string, error)
 }
